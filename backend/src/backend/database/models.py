@@ -11,10 +11,11 @@ from sqlalchemy.orm import relationship
 from .connection import Base
 
 class User(Base):
-    """사용자 정보 테이블 (Supabase Auth와 동기화)"""
+    """사용자 정보 테이블. Supabase의 auth.users 테이블과 1:1 관계를 가집니다."""
     __tablename__ = "users"
     
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # 이 id는 Supabase의 auth.users.id를 그대로 사용합니다.
+    id = Column(UUID(as_uuid=True), primary_key=True)
     email = Column(String, unique=True, nullable=False)
     user_profile = Column(JSONB, nullable=True)  # 라이프스타일, 선호도, 예산 등
     created_at = Column(DateTime(timezone=True), server_default=func.now())

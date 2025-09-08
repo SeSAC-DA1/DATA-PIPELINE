@@ -1,9 +1,8 @@
 -- 1. users 테이블 생성
 -- 서비스에 가입한 사용자의 기본 정보와 AI 추천에 필요한 프로필 데이터를 저장합니다.
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), -- 사용자 고유 식별자 (Primary Key)
+    id UUID PRIMARY KEY, -- 사용자 고유 식별자 (Supabase auth.users.id와 동일)
     email TEXT UNIQUE NOT NULL, -- 로그인에 사용될 이메일 주소 (고유값, 필수)
-    password TEXT NOT NULL, -- 암호화하여 저장될 비밀번호 (필수)
     user_profile JSONB, -- 사용자의 라이프스타일, 선호도, 예산 등 추천에 필요한 정보
     created_at TIMESTAMPTZ DEFAULT NOW() -- 사용자 가입일
 );
