@@ -68,7 +68,7 @@ services:
 
   # Next.js 프론트엔드 (개발용)
   frontend:
-    build: ./frontend
+    build: ../frontend
     container_name: carfin_frontend
     restart: unless-stopped
     ports:

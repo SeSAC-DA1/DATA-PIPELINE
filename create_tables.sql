@@ -60,3 +60,21 @@ CREATE TABLE matches (
     created_at TIMESTAMPTZ DEFAULT NOW() -- 매칭 생성 시각
 );
 COMMENT ON TABLE matches IS '금융 상품 매칭 결과';
+
+-- 6. loan_rates 테이블 생성
+-- 특정 금융 상품의 기간별 금리 정보를 저장합니다.
+CREATE TABLE loan_rates (
+  product_id     UUID        NOT NULL REFERENCES financial_products(id) ON DELETE CASCADE, -- 금융 상품 ID (FK)
+  effective_date DATE        NOT NULL,                  -- 기준일자
+  term_months    SMALLINT    NOT NULL,                  -- 만기 (6, 12, ...)
+  base_rate      DECIMAL(5,2) NOT NULL,                 -- 기준금리(%)
+  spread_rate    DECIMAL(5,2) NOT NULL,                 -- 가산금리(%)
+  pref_rate      DECIMAL(5,2) NOT NULL,                 -- 우대금리(%)
+  min_rate       DECIMAL(5,2) NOT NULL,                 -- 최저금리(%)
+  max_rate       DECIMAL(5,2) NOT NULL,                 -- 최고금리(%)
+  source_url     VARCHAR(255) NULL,                     -- 크롤링 원본
+  scraped_at     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (product_id, effective_date, term_months), -- 복합 기본 키
+  INDEX idx_loan_rates_date (effective_date)
+);
+COMMENT ON TABLE loan_rates IS '기간별 대출 금리 정보';

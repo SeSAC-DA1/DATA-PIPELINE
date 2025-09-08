@@ -4,7 +4,7 @@ SQLAlchemy ORM 모델들
 """
 
 import uuid
-from sqlalchemy import Column, String, Integer, Float, DateTime, Text, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, Float, DateTime, Text, ForeignKey, Index, Date, SmallInteger, Numeric
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -64,6 +64,7 @@ class FinancialProduct(Base):
     
     # 관계 설정
     matches = relationship("Match", back_populates="product")
+    rates = relationship("LoanRate", back_populates="product", cascade="all, delete-orphan")
 
 class Recommendation(Base):
     """개인화 추천 결과 테이블"""
@@ -92,3 +93,24 @@ class Match(Base):
     # 관계 설정
     user = relationship("User", back_populates="matches")
     product = relationship("FinancialProduct", back_populates="matches")
+
+class LoanRate(Base):
+    """기간별 대출 금리 정보 테이블"""
+    __tablename__ = "loan_rates"
+
+    product_id = Column(UUID(as_uuid=True), ForeignKey('financial_products.id'), primary_key=True)
+    effective_date = Column(Date, primary_key=True)
+    term_months = Column(SmallInteger, primary_key=True)
+    base_rate = Column(Numeric(5, 2), nullable=False)
+    spread_rate = Column(Numeric(5, 2), nullable=False)
+    pref_rate = Column(Numeric(5, 2), nullable=False)
+    min_rate = Column(Numeric(5, 2), nullable=False)
+    max_rate = Column(Numeric(5, 2), nullable=False)
+    source_url = Column(String(255), nullable=True)
+    scraped_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    product = relationship("FinancialProduct", back_populates="rates")
+
+    __table_args__ = (
+        Index('idx_loan_rates_date', 'effective_date'),
+    )
