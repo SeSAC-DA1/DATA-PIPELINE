@@ -2,6 +2,8 @@
 
 ### 🏷️ 기본 정보
 ---
+> 차량 정보
+
 `Id`: 차량 매물의 고유 ID(엔카 내부 식별자)
 
 `Separation`: 매물 구분(일반, 인증 등 카테고리 표식)
@@ -11,8 +13,6 @@
 `Condition`: 상태 표기(성능점검/무사고 등 간단 태그성 정보)
 
 `Photo` / `Photos`: 대표 이미지 URL / 이미지 배열
-
----
 
 `Manufacturer`: 제조사 (ex. 현대, 기아, BMW)
 
@@ -31,6 +31,7 @@
 `Price`: 판매가격
 
 ---
+> 판매관련 정보
 
 `SellType`: 구매형태 (ex. 일반/리스)
 
@@ -45,11 +46,17 @@
 `DealerName`: 딜러 이름 (ex. 박O근)
 
 ---
+> 기타정보 (중요도 떨어지는 컬럼)
+
 `AdWords` / `Hotmark` / `Powerpack`: 프로모션/광고/추천 노출 관련 내부 태그
 
-`BrandAuthCmnt`: 브랜드 인증 (ex. 대구경북 폭스바겐 공식인증 중고차 사업부에서 판매하는 차량)
+`BrandAuthCmnt`: 브랜드 인증 (ex. 대구 경북 폭스바겐 공식인증 중고차 사업부에서 판매하는 차량)
+
+`AcceptanceCharge` : 인수 요금 (없는 경우가 대다수)
 
 `Lease` / `LeaseType` / `MonthLeasePrice` / `MonthLeaseTotal` / `Deposit` / `ResidualValue` / `Succession`: 리스/승계 관련 정보(월리스료, 보증금, 잔존가치, 승계 가능 여부 등).
+
+`HomeServiceProgress`: 홈서비스 과정 (없는 경우가 대다수)
 
 
 
