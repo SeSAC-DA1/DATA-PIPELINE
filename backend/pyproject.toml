@@ -1,0 +1,39 @@
+[project]
+name = "carfin-ai-backend"
+version = "0.1.0"
+description = "Backend API for CarFin AI service."
+authors = [
+    {name = "Charlee", email = "nimowa03@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "supabase>=2.4.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.7.0",
+]
+
+# --- 머신러닝 의존성 ---
+# 아래는 프로젝트에서 사용할 수 있는 머신러닝 라이브러리 예시입니다.
+# 실제로 필요한 라이브러리만 주석을 해제하여 사용하세요.
+# poetry add <package-name> 명령어로 추가하는 것을 권장합니다.
+#
+# langchain = ">=0.1.16"
+# scikit-learn = ">=1.4.2"
+# xgboost = ">=2.0.3"
+# lightgbm = ">=4.3.0"
+# tensorflow = ">=2.16.1"
+# torch = ">=2.2.2"
+
+[tool.poetry]
+packages = [{include = "backend", from = "src"}]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.1.1"
+httpx = ">=0.27.0" # FastAPI 테스트 시 필요
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

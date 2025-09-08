@@ -1,0 +1,17 @@
+
+    # Environments
+    .env
+    .env.*
+    !.env.example
+    
+    # Node modules
+    frontend/node_modules
+    
+    # Python
+    backend/__pycache__
+    backend/.venv
+    backend/venv
+    
+    # Docker
+    redis_data
+    
