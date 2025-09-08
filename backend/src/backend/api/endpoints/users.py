@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 # 설정 파일에서 Supabase 클라이언트를 가져옵니다.
-from backend.core.config import supabase_client
+from ...core.config import supabase_client
 
 # 이 파일의 API 엔드포인트들을 위한 라우터를 생성합니다.
 router = APIRouter()

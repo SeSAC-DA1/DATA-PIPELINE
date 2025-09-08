@@ -1,14 +1,51 @@
-import os
-from dotenv import load_dotenv
-from supabase import create_client, Client
+"""
+애플리케이션 설정 관리
+환경 변수와 설정 클래스
+"""
 
-# .env 파일 로드
+import os
+from pydantic import BaseSettings
+from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# .env 파일을 읽어옵니다.
 load_dotenv()
 
-# Supabase 설정
-SUPABASE_URL: str = os.environ.get("SUPABASE_URL")
-SUPABASE_SERVICE_KEY: str = os.environ.get("SUPABASE_SERVICE_KEY")
+class Settings(BaseSettings):
+    """애플리케이션 설정"""
+    
+    # 데이터베이스 설정
+    database_url: str = os.getenv(
+        "DATABASE_URL", 
+        "postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@localhost:5432/carfin"
+    )
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+    
+    # Supabase 설정 (인증용)
+    supabase_url: str = os.getenv("SUPABASE_URL", "")
+    supabase_anon_key: str = os.getenv("SUPABASE_ANON_KEY", "")
+    supabase_service_key: str = os.getenv("SUPABASE_SERVICE_KEY", "")
+    
+    # API 설정
+    api_v1_str: str = "/api/v1"
+    project_name: str = "CarFin AI Backend"
+    
+    # 환경 설정
+    environment: str = os.getenv("ENVIRONMENT", "development")
+    debug: bool = os.getenv("DEBUG", "True").lower() == "true"
+    
+    # 보안 설정
+    secret_key: str = os.getenv("SECRET_KEY", "carfin-secret-key-2025")
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    
+    class Config:
+        env_file = ".env"
 
-# Supabase 클라이언트 생성
-# 이 클라이언트는 다른 파일에서 가져와서 사용합니다.
-supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+# 전역 설정 인스턴스
+settings = Settings()
+
+# Supabase 클라이언트 (인증용으로만 사용)
+supabase_client: Client = None
+if settings.supabase_url and settings.supabase_service_key:
+    supabase_client = create_client(settings.supabase_url, settings.supabase_service_key)
