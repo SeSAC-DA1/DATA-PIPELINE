@@ -19,7 +19,7 @@
 | (서버 & AI) | `Supabase` (Python SDK), `python-dotenv`, `pydantic`, `requests`, `httpx` | Supabase를 통한 인증, 환경 변수 관리, 데이터 유효성 검사, HTTP 통신을 처리합니다. |
 | | `psycopg2-binary`, `asyncpg`, `SQLAlchemy`, `Alembic` | PostgreSQL 데이터베이스 연동 및 마이그레이션을 위한 라이브러리입니다. |
 | | `redis` | 빠른 데이터 캐싱 및 세션 관리를 위해 사용합니다. |
-| | `scikit-learn`, `pandas`, `numpy` (AI/ML 라이브러리, 필요시) | 차량 리스크 분석, 그리고 **RAG(Retrieval-Augmented Generation) 기술을 활용한 개인화 추천** 등 프로젝트의 핵심 AI 모델을 개발하는 데 사용될 수 있습니다. |
+| | `scikit-learn`, `pandas`, `numpy` (AI/ML 라이브러리) | 차량 리스크 분석 및 **개인화된 차량 추천 시스템**과 같은 핵심 AI 모델을 개발하는 데 활용됩니다. 특히, **scikit-learn**은 다양한 머신러닝 알고리즘을 제공하여 추천 모델 구축에 적합합니다. |
 | **데이터베이스** | `PostgreSQL` | 실무에서 가장 널리 사용되는 관계형 데이터베이스로, 안정성과 확장성이 뛰어납니다. **Docker Compose로 직접 구축하여 완전한 제어권을 확보**합니다. |
 | **인증 시스템** | `Supabase Auth` | 구글 소셜 로그인 등 OAuth 인증 기능을 빠르게 구현하기 위해 사용합니다. |
 | **캐싱 & 세션** | `Redis` | 빠른 데이터 캐싱과 사용자 세션 관리를 위해 사용합니다. |
@@ -55,53 +55,6 @@
 - **확장성**: 필요에 따라 Read Replica, 샤딩 등 구현 가능
 - **비용 효율성**: 오픈소스 기반으로 라이센스 비용 없음
 - **포트폴리오 가치**: 실무에서 요구하는 "인프라 구축 및 관리" 경험
-
----
-
-## 🚀 시작하기 (Getting Started)
-
-이 프로젝트는 Docker와 Docker Compose를 사용하여 개발 환경을 쉽게 구축할 수 있습니다.
-
-### 📋 필수 요구사항
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Docker Engine 및 Docker Compose 포함)
-
-### ⚙️ 환경 설정
-1.  프로젝트 루트 디렉토리로 이동합니다. (`C:\Users\MJ\Desktop\SeSAC-DA1`)
-2.  `backend/backend/.env.example` 파일을 복사하여 `backend/backend/.env` 파일을 생성하고, 필요한 환경 변수를 설정합니다. (예: Supabase 키, 데이터베이스 연결 정보 등)
-    ```bash
-    cp backend/backend/.env.example backend/backend/.env
-    ```
-3.  `docker-compose.yml` 파일에 정의된 서비스들이 사용할 볼륨을 생성합니다. (Docker Compose가 자동으로 생성하지만, 명시적으로 확인하는 것이 좋습니다.)
-
-### 🏃‍♂️ 프로젝트 실행
-프로젝트의 모든 서비스를 Docker Compose를 사용하여 한 번에 실행할 수 있습니다.
-
-```bash
-docker-compose up --build -d
-```
-- `--build`: 이미지 변경 사항이 있을 경우 다시 빌드합니다.
-- `-d`: 백그라운드에서 서비스를 실행합니다.
-
-서비스가 성공적으로 시작되면 다음 포트에서 접근할 수 있습니다:
-- **FastAPI 백엔드**: `http://localhost:8000`
-- **Next.js 프론트엔드**: `http://localhost:3005`
-- **PostgreSQL 데이터베이스**: `localhost:5432`
-- **Redis 캐시**: `localhost:6379`
-
-### 🛑 프로젝트 중지
-모든 서비스를 중지하고 컨테이너를 제거하려면 다음 명령어를 사용합니다:
-
-```bash
-docker-compose down
-```
-- `-v`: 볼륨까지 제거하려면 `-v` 옵션을 추가합니다. (데이터베이스 데이터가 삭제되므로 주의하십시오.)
-
-### 🧪 테스트 실행
-백엔드 테스트는 `backend/backend/tests` 디렉토리에 있으며, 다음 명령어로 실행할 수 있습니다:
-
-```bash
-docker-compose exec backend pytest
-```
 
 ---
 
