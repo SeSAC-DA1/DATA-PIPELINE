@@ -77,3 +77,42 @@ CREATE TABLE loan_rates (
   INDEX idx_loan_rates_date (effective_date)
 );
 COMMENT ON TABLE loan_rates IS '기간별 대출 금리 정보';
+
+-- 7. 캐글 csv파일 고객 정보
+CREATE TABLE customers (
+    sk_id_curr                  INTEGER PRIMARY KEY,              -- 고객 ID
+
+    -- 0/1을 그대로 저장 (boolean 아님)
+    code_gender                 SMALLINT NOT NULL CHECK (code_gender IN (0,1)),
+    flag_own_car                SMALLINT NOT NULL CHECK (flag_own_car IN (0,1)),
+    flag_own_realty             SMALLINT NOT NULL CHECK (flag_own_realty IN (0,1)),
+
+    cnt_children                SMALLINT        CHECK (cnt_children >= 0),
+    amt_income_total            NUMERIC(14,2)   CHECK (amt_income_total >= 0),
+    amt_credit                  NUMERIC(14,2)   CHECK (amt_credit >= 0),
+    amt_annuity                 NUMERIC(14,2),
+
+    name_type_suite             TEXT,
+    name_income_type            TEXT,
+    name_education_type         TEXT,
+    name_housing_type           TEXT,
+    
+
+    region_population_relative  NUMERIC(8,6),
+    days_birth                  INTEGER,        -- 음수(과거 일수)
+    days_employed               INTEGER,        -- 특수 큰값(미취업 플래그) 사전 처리 권장
+    days_id_publish             INTEGER,
+    own_car_age                 SMALLINT,
+    cnt_fam_members             SMALLINT        CHECK (cnt_fam_members >= 0),
+    hour_appr_process_start     SMALLINT        CHECK (hour_appr_process_start BETWEEN 0 AND 23),
+
+    organization_type           TEXT,
+
+    ext_source_1                NUMERIC(10,8),  -- 0~1, 결측 허용
+    ext_source_2                NUMERIC(10,8),
+    ext_source_3                NUMERIC(10,8),
+
+    days_last_phone_change      INTEGER,
+    amt_req_credit_bureau_year  SMALLINT        CHECK (amt_req_credit_bureau_year >= 0),
+
+);
