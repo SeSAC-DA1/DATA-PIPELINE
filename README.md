@@ -38,7 +38,7 @@
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Frontend      │    │   Backend       │    │   Database      │
 │   (Next.js)     │ ─► │   (FastAPI)     │ ─► │   (PostgreSQL)  │
-│   Port: 3000    │    │   Port: 8000    │    │   Port: 5432    │
+│   Port: 3000    │    │   Port:: 8000    │    │   Port: 5432    │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
          └───────────────────────┼───────────────────────┘
@@ -140,6 +140,45 @@
 6.  **AI 모델 개발**: 차량 추천 및 리스크 분석 모델 개발 및 API 연동.
 7.  **프론트엔드 화면 구현**: 사용자 대시보드, 추천 결과, 금융 매칭 UI 개발.
 8.  **성능 최적화 및 배포**: 대용량 데이터 처리 최적화, 클라우드 배포.
+
+---
+
+## 📄 API 문서 (API Documentation)
+
+CarFin 백엔드 API는 FastAPI를 기반으로 하며, 자동으로 생성되는 대화형 API 문서를 제공합니다. 백엔드 서버가 실행 중일 때 다음 URL에서 접근할 수 있습니다:
+
+*   **Swagger UI**: `http://localhost:8000/docs`
+*   **ReDoc**: `http://localhost:8000/redoc`
+
+---
+
+## 🗄️ 데이터베이스 마이그레이션 (Database Migrations)
+
+프로젝트는 Alembic을 사용하여 데이터베이스 스키마 변경 사항을 관리합니다. 새로운 마이그레이션을 생성하거나 기존 마이그레이션을 적용하려면 다음 명령어를 사용합니다:
+
+*   **새로운 마이그레이션 스크립트 생성**:
+    ```bash
+    docker-compose exec backend alembic revision --autogenerate -m "Your migration message"
+    ```
+    (여기서 "Your migration message"는 변경 내용을 설명하는 메시지로 대체합니다.)
+
+*   **마이그레이션 적용 (최신 버전으로 업데이트)**:
+    ```bash
+    docker-compose exec backend alembic upgrade head
+    ```
+
+---
+
+## ⚙️ 환경 변수 (Environment Variables)
+
+백엔드 서비스는 `.env` 파일을 통해 환경 변수를 관리합니다. `backend/backend/.env.example` 파일을 복사하여 `backend/backend/.env` 파일을 생성하고, 다음 필수 환경 변수를 설정해야 합니다:
+
+*   `DATABASE_URL`: PostgreSQL 데이터베이스 연결 URL (예: `postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@postgres:5432/carfin`)
+*   `REDIS_URL`: Redis 서버 연결 URL (예: `redis://redis:6379/0`)
+*   `SUPABASE_URL`: Supabase 프로젝트 URL
+*   `SUPABASE_KEY`: Supabase 서비스 역할 키 (또는 공개 API 키)
+*   `ENVIRONMENT`: 애플리케이션 환경 (예: `development`, `production`)
+*   `DEBUG`: 디버그 모드 활성화 여부 (`True` 또는 `False`)
 
 ---
 
