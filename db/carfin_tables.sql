@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
     detail_url VARCHAR(1024), -- 상세 페이지 URL
     Photo VARCHAR(1024), -- 차량 이미지 URL
     PRIMARY KEY (Id)
-) 
+);
 
 -- 조회용 인덱스
 CREATE INDEX IF NOT EXISTS idx_vehicles_maker_model ON vehicles(Manufacturer, Model);
