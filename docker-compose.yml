@@ -46,25 +46,18 @@ services:
     build: ./backend
     container_name: carfin_backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      - DATABASE_URL=postgresql://carfin_admin:carfin_secure_password_2025@postgres:5432/carfin
-      - REDIS_URL=redis://redis:6379
-    env_file:
-      - ./backend/.env
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
 
   # Next.js 프론트엔드 (개발용)
   frontend:
@@ -72,9 +65,12 @@ services:
     container_name: carfin_frontend
     restart: unless-stopped
     ports:
-      - "3001:3000"
-    volumes:
-      - ./frontend:/app
+      - "3005:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
     depends_on:
       backend:
         condition: service_healthy

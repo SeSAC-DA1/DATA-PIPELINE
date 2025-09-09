@@ -3,25 +3,16 @@ PostgreSQL 데이터베이스 연결 관리
 SQLAlchemy를 사용한 비동기 데이터베이스 연결
 """
 
-import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 import redis.asyncio as redis
 from typing import AsyncGenerator
-
-# 데이터베이스 URL 설정
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@localhost:5432/carfin"
-)
-
-# Redis URL 설정
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+from ..core.config import settings
 
 # SQLAlchemy 설정
 engine = create_async_engine(
-    DATABASE_URL,
+    settings.database_url,
     echo=False,  # 운영환경에서는 False
     pool_size=20,
     max_overflow=0,
@@ -62,7 +53,7 @@ async def get_redis_client():
     """
     global redis_client
     if redis_client is None:
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client = redis.from_url(settings.redis_url, decode_responses=True)
     return redis_client
 
 async def close_database_connections():

@@ -5,6 +5,7 @@ CarFin AI Backend - FastAPI 애플리케이션 메인 모듈
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 from .api.router import api_router
 from .core.config import settings, supabase_client
 from .database.connection import get_database_session, get_redis_client, close_database_connections
@@ -38,7 +39,7 @@ async def health_check(
     """
     try:
         # PostgreSQL 연결 확인
-        await db.execute("SELECT 1")
+        await db.execute(text("SELECT 1"))
         postgres_status = "Connected"
     except Exception as e:
         postgres_status = f"Failed: {str(e)}"
