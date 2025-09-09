@@ -8,6 +8,80 @@
 
 ---
 
+## 📂 프로젝트 구조 (Project Structure)
+
+이 프로젝트는 여러 컴포넌트(API 서버, 데이터 파이프라인 등)를 하나의 저장소에서 관리하는 **모노레포(Monorepo)** 구조를 따릅니다.
+
+```
+.
+├── backend/          #  FastAPI 기반의 메인 API 서버
+├── data-pipeline/    # 데이터 수집 및 처리를 위한 파이프라인
+├── db/               # 데이터베이스 초기화 스크립트 및 설정
+├── docs/             # 프로젝트 관련 문서
+├── docker-compose.yml  # 전체 서비스 실행을 위한 Docker Compose 파일
+└── README.md         # 프로젝트 안내 문서
+```
+
+각 폴더는 독립적인 애플리케이션으로 구성되어 있으며, 자세한 내용은 각 폴더의 `README.md`를 참고해주세요.
+
+---
+
+## ✨ Git 협업 워크플로우 (Git Workflow)
+
+우리 팀은 `Git-flow` 전략을 기반으로 협업을 진행합니다.
+
+- **`main`**: 🚢 **제품 출시**를 위한 브랜치입니다. 오직 `develop` 브랜치의 내용만 병합(Merge)하며, 직접적인 수정은 절대 금지합니다.
+- **`develop`**: ✨ **다음 버전 개발**을 위한 통합 브랜치입니다. 모든 기능 개발은 이 브랜치에서 시작하고, 완료된 기능은 이 브랜치로 다시 병합됩니다.
+- **`feature/{기능이름}`**: 📝 **신규 기능 개발**을 위한 브랜치입니다. `develop`에서 생성하며, 개발 완료 후 `develop`으로 PR(Pull Request)을 보냅니다. (예: `feature/login-api`)
+
+### 🤝 협업 절차
+1. `develop` 브랜치에서 최신 코드를 `pull` 받습니다.
+2. `feature/기능이름` 브랜치를 새로 생성합니다.
+3. 기능 개발을 완료하고 자신의 `feature` 브랜치에 커밋합니다.
+4. GitHub에서 `develop` 브랜치를 대상으로 **Pull Request(PR)**를 생성합니다.
+5. 다른 팀원 1명 이상에게 **코드 리뷰**를 받고 승인(Approve)을 받습니다.
+6. PR을 `develop` 브랜치에 병합(Merge)합니다.
+
+---
+
+## 🏁 시작하기 (Getting Started)
+
+프로젝트를 로컬 환경에서 실행하기 위한 절차입니다.
+
+### 1. 저장소 복제
+```bash
+git clone https://github.com/SeSAC-DA1/backend.git
+cd backend
+```
+
+### 2. 환경변수 설정
+각 컴포넌트의 `.env.example` 파일을 복사하여 `.env` 파일을 생성하고, 자신의 로컬 환경에 맞게 값을 수정합니다.
+
+- `backend/.env.example` -> `backend/.env`
+- `data-pipeline/.env.example` -> `data-pipeline/.env`
+
+**`backend/.env` 예시:**
+```
+DATABASE_URL="postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@localhost:5432/carfin"
+REDIS_URL="redis://localhost:6379/0"
+# ... 기타 Supabase 키 등
+```
+> **Note**: `docker-compose` 환경에서는 호스트 이름을 `localhost`가 아닌 Docker Compose 파일에 정의된 서비스 이름(예: `postgres`)으로 설정해야 합니다.
+
+### 3. 서비스 실행
+프로젝트 루트 디렉토리에서 아래 명령어를 실행하여 모든 서비스를 한 번에 시작합니다.
+```bash
+docker-compose up --build
+```
+- `--build` 옵션은 Docker 이미지를 새로 빌드한 후 컨테이너를 실행합니다. 코드 변경사항이 있을 때 사용합니다.
+
+### 4. API 문서 확인
+백엔드 서버가 정상적으로 실행되면, 아래 주소에서 자동으로 생성된 API 문서를 확인할 수 있습니다.
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+
+---
+
 ## 🛠️ 기술 스택 (Technology Stack)
 
 실무 환경과 동일한 기술 스택을 사용하여 확장 가능하고 안정적인 시스템을 구축합니다.
