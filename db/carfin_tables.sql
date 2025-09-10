@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
     Market VARCHAR(16), -- 국내차/외제차
     Manufacturer VARCHAR(100), -- 제조사
     Model VARCHAR(150), -- 모델명
-    Category VARCHAR(50), -- 차종
+    Category VARCHAR(150), -- 차종
     Badge VARCHAR(100), -- 트림/등급
     BadgeDetail VARCHAR(150), -- 트림 상세
     Transmission VARCHAR(50), -- 변속기
@@ -18,10 +18,3 @@ CREATE TABLE IF NOT EXISTS vehicles (
     Photo VARCHAR(1024), -- 차량 이미지 URL
     PRIMARY KEY (Id)
 );
-
--- 조회용 인덱스
-CREATE INDEX IF NOT EXISTS idx_vehicles_maker_model ON vehicles(Manufacturer, Model);
-CREATE INDEX IF NOT EXISTS idx_vehicles_yearON vehicles(Year);
-CREATE INDEX IF NOT EXISTS idx_vehicles_price ON vehicles(Price);
-CREATE INDEX IF NOT EXISTS idx_vehicles_office ON vehicles(OfficeCityState);
-CREATE INDEX IF NOT EXISTS idx_vehicles_market ON vehicles(Market);
