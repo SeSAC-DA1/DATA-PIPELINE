@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from .api.router import api_router
 from .core.config import settings, supabase_client
-from .database.connection import get_database_session, get_redis_client, close_database_connections
+from .database.connection import get_database_session, close_database_connections
 
 # FastAPI 애플리케이션을 생성합니다.
 app = FastAPI(
     title=settings.project_name,
-    description="CarFin AI 서비스의 백엔드 API - PostgreSQL + Redis 기반",
+    description="CarFin AI 서비스의 백엔드 API - PostgreSQL 기반",
     version="1.0.0",
     debug=settings.debug
 )
@@ -44,13 +44,6 @@ async def health_check(
     except Exception as e:
         postgres_status = f"Failed: {str(e)}"
     
-    try:
-        # Redis 연결 확인
-        redis = await get_redis_client()
-        await redis.ping()
-        redis_status = "Connected"
-    except Exception as e:
-        redis_status = f"Failed: {str(e)}"
     
     # Supabase Auth 상태 확인
     supabase_status = "Connected" if supabase_client else "Not configured"
@@ -60,7 +53,6 @@ async def health_check(
         "environment": settings.environment,
         "databases": {
             "postgresql": postgres_status,
-            "redis": redis_status,
             "supabase_auth": supabase_status
         }
     }
