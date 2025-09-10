@@ -15,3 +15,5 @@
     # Docker
     redis_data
     
+    # 환경변수 
+    .env
