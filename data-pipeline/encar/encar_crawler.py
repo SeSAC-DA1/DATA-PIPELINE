@@ -31,6 +31,9 @@ ENG2KOR = {
     "large car": "대형차",
     "sports car": "스포츠카",
     "suv": "SUV",
+    "rv":"RV",
+    "van":"승합차",
+    "truck":"화물차",
 }
 def norm_cat_for_dsl(name: str) -> str:
     return ENG2KOR.get(str(name).strip().lower(), name)
@@ -194,7 +197,6 @@ def shape_rows(df_raw: pd.DataFrame, pageid: str, category_fallback: str, market
 
 # ===== 크롤링 → UPSERT =====
 def crawl_market_to_mysql(market_key: str, categories_en, sort="ModifiedDate", limit=50, sleep_sec=0.6):
-    """카테고리별(단일)로 나누어 요청하여 vehicles 테이블에 UPSERT"""
     conf = MARKET[market_key]
     s = make_session(conf["referer"])
 
@@ -230,7 +232,7 @@ def crawl_market_to_mysql(market_key: str, categories_en, sort="ModifiedDate", l
     print(f"[{market_key}] 전체 합계: {total_saved:,}건 UPSERT 완료 → vehicles")
 
 def main():
-    categories_en = ["light car", "compact car", "semi-medium car", "medium car", "large car", "SUV"]
+    categories_en = ["light car", "compact car", "semi-medium car", "medium car", "large car", "sports car", "suv", "rv", "van", "truck"]
     crawl_market_to_mysql("korean",  categories_en, sort="ModifiedDate", limit=50)
     crawl_market_to_mysql("foreign", categories_en, sort="ModifiedDate", limit=50)
 
