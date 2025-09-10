@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
 from pydantic import BaseModel
 
-from ..database.connection import get_database_session
-from ..database.models import Vehicle
+from ...database.connection import get_database_session
+from ...database.models import Vehicle
 
 router = APIRouter()
 

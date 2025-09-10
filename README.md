@@ -63,7 +63,6 @@ cd backend
 **`backend/.env` 예시:**
 ```
 DATABASE_URL="postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@localhost:5432/carfin"
-REDIS_URL="redis://localhost:6379/0"
 # ... 기타 Supabase 키 등
 ```
 > **Note**: `docker-compose` 환경에서는 호스트 이름을 `localhost`가 아닌 Docker Compose 파일에 정의된 서비스 이름(예: `postgres`)으로 설정해야 합니다.
@@ -92,12 +91,10 @@ docker-compose up --build
 | **백엔드** | `FastAPI` (Python), `Uvicorn` | AI 모델의 결과를 전달하고, 데이터를 처리하는 고성능 서버를 빠르게 구축합니다. |
 | (서버 & AI) | `Supabase` (Python SDK), `python-dotenv`, `pydantic`, `requests`, `httpx` | Supabase를 통한 인증, 환경 변수 관리, 데이터 유효성 검사, HTTP 통신을 처리합니다. |
 | | `psycopg2-binary`, `asyncpg`, `SQLAlchemy`, `Alembic` | PostgreSQL 데이터베이스 연동 및 마이그레이션을 위한 라이브러리입니다. |
-| | `redis` | 빠른 데이터 캐싱 및 세션 관리를 위해 사용합니다. |
 | | `scikit-learn`, `pandas`, `numpy` (AI/ML 라이브러리) | 차량 리스크 분석 및 **개인화된 차량 추천 시스템**과 같은 핵심 AI 모델을 개발하는 데 활용됩니다. 특히, **scikit-learn**은 다양한 머신러닝 알고리즘을 제공하여 추천 모델 구축에 적합합니다. |
 | **데이터베이스** | `PostgreSQL` | 실무에서 가장 널리 사용되는 관계형 데이터베이스로, 안정성과 확장성이 뛰어납니다. **Docker Compose로 직접 구축하여 완전한 제어권을 확보**합니다. |
 | **인증 시스템** | `Supabase Auth` | 구글 소셜 로그인 등 OAuth 인증 기능을 빠르게 구현하기 위해 사용합니다. |
-| **캐싱 & 세션** | `Redis` | 빠른 데이터 캐싱과 사용자 세션 관리를 위해 사용합니다. |
-| **인프라** | `Docker`, `docker-compose` | 어디서든 동일한 개발/실행 환경을 보장하고, **PostgreSQL, Redis 등 모든 서비스를 컨테이너로 관리**합니다. |
+| **인프라** | `Docker`, `docker-compose` | 어디서든 동일한 개발/실행 환경을 보장하고, **PostgreSQL 등 모든 서비스를 컨테이너로 관리**합니다. |
 | (개발 환경) | `Poetry` (Python 의존성 관리) | 백엔드(Python)에서 사용하는 수많은 라이브러리들의 버전을 깔끔하게 관리합니다. |
 | **테스트** | `pytest`, `pytest-asyncio` | 백엔드 API의 기능 및 비동기 테스트를 위한 프레임워크입니다. |
 
@@ -112,17 +109,15 @@ docker-compose up --build
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Frontend      │    │   Backend       │    │   Database      │
 │   (Next.js)     │ ─► │   (FastAPI)     │ ─► │   (PostgreSQL)  │
-│   Port: 3000    │    │   Port:: 8000    │    │   Port: 5432    │
+│   Port: 3000    │    │   Port: 8000    │    │   Port: 5432    │
+│   (별도 개발)    │    │                 │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 ▼
-                    ┌─────────────────┐
-                    │     Redis       │
-                    │   (Cache)       │
-                    │   Port: 6379    │
-                    └─────────────────┘
 ```
+
+**현재 구성 (Backend + Database):**
+- Backend (FastAPI): `http://localhost:8000`
+- Database (PostgreSQL): `localhost:5432`
+- Frontend: 별도 개발 예정
 
 ### 💪 주요 장점
 - **완전한 제어권**: 데이터베이스 설정, 튜닝, 백업을 직접 관리
@@ -208,7 +203,7 @@ docker-compose up --build
 
 1.  **기반 공사 (✅ 완료)**: 개발 환경 구축, Docker Compose 기반 인프라 구성 완료.
 2.  **인증 시스템 구축 (✅ 완료)**: Supabase Auth를 활용한 구글 소셜 로그인 구현 완료.
-3.  **데이터베이스 서버 구축 (🎯 진행 중)**: PostgreSQL + Redis를 Docker Compose로 구성, 테이블 생성.
+3.  **데이터베이스 서버 구축 (✅ 완료)**: PostgreSQL을 Docker Compose로 구성, 테이블 생성 완료.
 4.  **백엔드 API 개발**: 차량 데이터 CRUD, 추천 시스템, 금융 매칭 API 구현.
 5.  **데이터 수집 시스템**: 중고차 크롤링팀과 연동하여 대량 데이터 수집 파이프라인 구축.
 6.  **AI 모델 개발**: 차량 추천 및 리스크 분석 모델 개발 및 API 연동.
@@ -248,7 +243,6 @@ CarFin 백엔드 API는 FastAPI를 기반으로 하며, 자동으로 생성되�
 백엔드 서비스는 `.env` 파일을 통해 환경 변수를 관리합니다. `backend/backend/.env.example` 파일을 복사하여 `backend/backend/.env` 파일을 생성하고, 다음 필수 환경 변수를 설정해야 합니다:
 
 *   `DATABASE_URL`: PostgreSQL 데이터베이스 연결 URL (예: `postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@postgres:5432/carfin`)
-*   `REDIS_URL`: Redis 서버 연결 URL (예: `redis://redis:6379/0`)
 *   `SUPABASE_URL`: Supabase 프로젝트 URL
 *   `SUPABASE_KEY`: Supabase 서비스 역할 키 (또는 공개 API 키)
 *   `ENVIRONMENT`: 애플리케이션 환경 (예: `development`, `production`)

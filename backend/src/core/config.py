@@ -19,7 +19,6 @@ class Settings(BaseSettings):
         "DATABASE_URL", 
         "postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@postgres:5432/carfin"
     )
-    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379")
     
     # Supabase 설정 (인증용)
     supabase_url: str = os.getenv("SUPABASE_URL", "")
