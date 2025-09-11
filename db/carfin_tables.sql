@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS vehicles (
     PRIMARY KEY (vehicleId)
 );
 
-
 -- 2. 차량Id + 차량번호
 CREATE TABLE IF NOT EXISTS vehicles_info (
     vehicleId INT PRIMARY KEY,    -- 차량 고유 ID
@@ -27,7 +26,7 @@ CREATE TABLE IF NOT EXISTS vehicles_info (
     FOREIGN KEY (vehicleId) REFERENCES vehicles(vehicleId)
 );
 
--- 3. 보험이력 목록
+-- 3. 성능점검표 목록
 CREATE TABLE IF NOT EXISTS vehicles_inspect (
     vehicleId INT PRIMARY KEY,    -- 차량 고유 ID
     WarrantyType VARCHAR(50),     -- 보증유형
@@ -37,5 +36,18 @@ CREATE TABLE IF NOT EXISTS vehicles_inspect (
     RecallStatus VARCHAR(16),     -- 리콜대상 여부
     AccidentHistory VARCHAR(16),  -- 사고이력 여부
     SimpleRepair VARCHAR(16),     -- 단순수리 여부
+    FOREIGN KEY (vehicleId) REFERENCES vehicles(vehicleId)
+);
+
+-- 4. 보험이력 목록
+CREATE TABLE IF NOT EXISTS vehicles_insurance (
+    vehicleId INT PRIMARY KEY,    -- 차량 고유 ID
+    vehicleNo VARCHAR(20),        -- 차량번호
+    OwnerChangeCnt INT,           -- 소유주 이전 횟수
+    MyAccidentCnt INT,            -- 내차 피해 사고이력(횟수)
+    MyAccidentCost INT,           -- 내차 피해 사고이력(금액)
+    OtherAccidentCnt INT,         -- 타차 가해 사고이력(횟수)
+    OtherAccidentCost INT,        -- 타차 가해 사고이력(금액)
+    isDisclosed TINYINT(1),       -- 보험이력 공개여부(0:비공개/1:공개)
     FOREIGN KEY (vehicleId) REFERENCES vehicles(vehicleId)
 );
