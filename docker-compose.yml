@@ -1,35 +1,13 @@
 # version 속성은 Docker Compose v2에서 더 이상 필요하지 않습니다
 
 services:
-  # PostgreSQL 데이터베이스 서버
-  postgres:
-    image: postgres:15-alpine
-    container_name: carfin_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: carfin
-      POSTGRES_USER: carfin_admin
-      POSTGRES_PASSWORD: carfin_secure_password_2025
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U carfin_admin -d carfin"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-  # FastAPI 백엔드 서버
+  # FastAPI 백엔드 서버 (RDS 연결)
   fastapi:
     build: ./backend
     container_name: carfin_fastapi
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@carfin-db.cbkayiqs4div.ap-northeast-2.rds.amazonaws.com:5432/carfin
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -45,9 +23,10 @@ services:
 
 # 프론트엔드는 별도로 개발하므로 제거
 
-volumes:
-  postgres_data:
-    driver: local
+# PostgreSQL 볼륨은 RDS 사용으로 더 이상 필요없음
+# volumes:
+#   postgres_data:
+#     driver: local
 
 networks:
   default:
