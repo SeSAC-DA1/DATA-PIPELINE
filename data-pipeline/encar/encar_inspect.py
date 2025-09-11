@@ -1,4 +1,3 @@
-# encar_inspect.py
 import os, time
 from pathlib import Path
 from typing import Optional, Dict, Any, List
