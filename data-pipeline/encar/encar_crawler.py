@@ -19,7 +19,7 @@ BASE_URL = "https://api.encar.com/search/car/list/premium"
 
 ENV_PATH = REPO_ROOT.parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
-load_dotenv()  # 추가 로드(있으면 덮어씀)
+load_dotenv()  
 
 # ===== 카테고리 매핑 =====
 ENG2KOR = {
@@ -47,7 +47,6 @@ MARKET = {
 # ===== HTTP =====
 def make_session(referer: str) -> requests.Session:
     s = requests.Session()
-    # 프록시 환경변수로 인한 407 회피
     s.trust_env = False
     s.proxies = {}
 
@@ -77,7 +76,6 @@ def get_json(s: requests.Session, params: dict):
 
 # ===== DSL =====
 def build_action_from_categories(categories, car_type="Y"):
-    """엔카 DSL: 주어진 카테고리(한글)의 OR 묶음 + CarType 필터"""
     names = [str(c).strip() for c in categories if c and str(c).strip()]
     names = list(dict.fromkeys(names))
     if not names:
@@ -111,7 +109,7 @@ def extract_photo(row: pd.Series):
         return row["Photo"]
     photos = row.get("Photos")
     if isinstance(photos, list) and photos:
-        first = photos[0]
+        first = photos
         if isinstance(first, dict):
             for k in ("url", "Url", "uri", "Uri", "imageUrl", "ImageUrl"):
                 if k in first and first[k]:
@@ -146,24 +144,24 @@ def upsert_df(engine, df: pd.DataFrame, table_name: str):
         return
     stmt = mysql_insert(table).values(recs)
     stmt = stmt.on_duplicate_key_update(
-        **{c.name: stmt.inserted[c.name] for c in table.columns if c.name != "Id"}
+        **{c.name: stmt.inserted[c.name] for c in table.columns if c.name != "vehicleId"}
     )
     with engine.begin() as conn:
         conn.execute(stmt)
 
 WANTED = [
-    "Id", "Market", "Manufacturer", "Model", "Category", "Badge", "BadgeDetail",
+    "vehicleId", "Market", "Manufacturer", "Model", "Category", "Badge", "BadgeDetail",
     "Transmission", "FuelType", "Year", "Mileage", "Price",
     "SellType", "OfficeCityState", "detail_url", "Photo"
 ]
 
 def shape_rows(df_raw: pd.DataFrame, pageid: str, category_fallback: str, market_key: str) -> pd.DataFrame:
-    id_col = next((c for c in ["Id", "id", "carId", "carid"] if c in df_raw.columns), None)
+    id_col = next((c for c in ["vehicleId", "VehicleId", "id", "Id", "carId", "carid"] if c in df_raw.columns), None)
     if id_col is None:
-        raise KeyError("Id column not found in SearchResults")
+        raise KeyError("vehicleId column not found in SearchResults")
 
     df = pd.DataFrame()
-    df["Id"] = df_raw[id_col].apply(to_int_safe) 
+    df["vehicleId"] = df_raw[id_col].apply(to_int_safe) 
     df["Market"] = market_key
     df["Manufacturer"] = df_raw.get("Manufacturer")
     df["Model"] = df_raw.get("Model")
@@ -184,13 +182,13 @@ def shape_rows(df_raw: pd.DataFrame, pageid: str, category_fallback: str, market
     df["Price"] = df_raw.get("Price").apply(to_int_safe) if "Price" in df_raw else None
     df["SellType"] = df_raw.get("SellType")
     df["OfficeCityState"] = df_raw.get("OfficeCityState")
-    df["detail_url"] = df["Id"].map(lambda x: make_detail_url(x, pageid) if pd.notna(x) else None)
+    df["detail_url"] = df["vehicleId"].map(lambda x: make_detail_url(x, pageid) if pd.notna(x) else None)
     df["Photo"] = df_raw.apply(extract_photo, axis=1)
 
     for c in ["Market", "Manufacturer", "Model", "Category", "Badge", "BadgeDetail",
               "Transmission", "FuelType", "SellType", "OfficeCityState", "detail_url", "Photo"]:
         df[c] = df[c].astype("string")
-    for c in ["Id", "Year", "Mileage", "Price"]:
+    for c in ["vehicleId", "Year", "Mileage", "Price"]:
         df[c] = df[c].astype("Int64")
 
     return df[WANTED]
