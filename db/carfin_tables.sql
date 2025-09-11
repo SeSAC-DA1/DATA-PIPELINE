@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
     BadgeDetail VARCHAR(150),       -- 트림 상세
     Transmission VARCHAR(50),       -- 변속기
     FuelType VARCHAR(50),           -- 연료
-    Year INT,                       -- 최초등록연도 (또는 연식)
+    Year INT,                       -- 최초등록연도 (연식)
     Mileage INT,                    -- 주행거리 (㎞)
     Price INT,                      -- 판매가 (원)
     SellType VARCHAR(50),           -- 판매형태 (일반/리스 등)
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS vehicles_inspect (
     Tuning VARCHAR(50),           -- 튜닝 여부
     ChangeUsage VARCHAR(16),      -- 용도변경 여부
     Recall VARCHAR(16),           -- 리콜대상 여부
-    RecallStatus VARCHAR(16),     -- 리콜대상 여부
+    RecallStatus VARCHAR(16),     -- 리콜이행 여부
     AccidentHistory VARCHAR(16),  -- 사고이력 여부
     SimpleRepair VARCHAR(16),     -- 단순수리 여부
     FOREIGN KEY (vehicleId) REFERENCES vehicles(vehicleId)
