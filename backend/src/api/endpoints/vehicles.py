@@ -5,10 +5,11 @@
 
 from typing import List, Optional
 from uuid import UUID
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 
 from ...database.connection import get_database_session
 from ...database.models import Vehicle
@@ -30,20 +31,18 @@ class VehicleCreate(BaseModel):
 
 class VehicleResponse(BaseModel):
     """차량 데이터 응답 스키마"""
-    id: UUID
-    source: Optional[str]
-    make: Optional[str]
-    model: Optional[str]
-    year: Optional[int]
-    mileage: Optional[int]
-    price: Optional[int]
-    details: Optional[dict]
-    risk_score: Optional[float]
-    tco: Optional[int]
-    created_at: str
+    model_config = ConfigDict(from_attributes=True)
     
-    class Config:
-        from_attributes = True
+    id: UUID
+    source: Optional[str] = None
+    make: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    mileage: Optional[int] = None
+    price: Optional[int] = None
+    details: Optional[dict] = None
+    risk_score: Optional[float] = None
+    tco: Optional[int] = None
 
 class VehicleSearch(BaseModel):
     """차량 검색 스키마"""

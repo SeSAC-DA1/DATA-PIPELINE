@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     supabase_anon_key: str = os.getenv("SUPABASE_ANON_KEY", "")
     supabase_service_key: str = os.getenv("SUPABASE_SERVICE_KEY", "")
     
+    # Google OAuth 설정
+    google_client_id: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    google_client_secret: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    
+    # OpenAI API 설정
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    
     # API 설정
     api_v1_str: str = "/api/v1"
     project_name: str = "CarFin AI Backend"
