@@ -1,0 +1,35 @@
+LoanID: 각 대출을 구분하는 고유 식별자
+
+Age: 차용인의 나이
+
+Income: 차용인의 연간 소득
+
+LoanAmount: 대출받는 금액
+
+CreditScore: 차용인의 신용 점수로, 신용도를 나타냄
+
+MonthsEmployed: 차용인이 근무한 개월 수
+
+NumCreditLines: 차용인이 보유한 신용계좌(신용 라인)의 개수
+
+InterestRate: 대출 이자율
+
+LoanTerm: 대출 상환 기간(개월 단위)
+
+DTIRatio: 부채 대비 소득 비율(차용인의 부채가 소득에 비해 어느 정도인지를 나타냄)
+
+Education: 차용인이 달성한 최고 학력(예: 박사, 석사, 학사, 고등학교)
+
+EmploymentType: 차용인의 고용 상태 유형(정규직, 시간제, 자영업, 실업 등)
+
+MaritalStatus: 차용인의 혼인 상태(미혼, 기혼, 이혼 등)
+
+HasMortgage: 차용인이 주택담보대출을 보유하고 있는지 여부(예/아니오)
+
+HasDependents: 차용인에게 부양가족이 있는지 여부(예/아니오)
+
+LoanPurpose: 대출 목적(주택, 자동차, 교육, 사업, 기타)
+
+HasCoSigner: 대출에 공동 보증인이 있는지 여부(예/아니오)
+
+Default: 대출이 연체(디폴트)되었는지 여부를 나타내는 이진 타깃 변수 (1: 연체, 0: 미연체)
