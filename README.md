@@ -8,6 +8,79 @@
 
 ---
 
+## 📂 프로젝트 구조 (Project Structure)
+
+이 프로젝트는 여러 컴포넌트(API 서버, 데이터 파이프라인 등)를 하나의 저장소에서 관리하는 **모노레포(Monorepo)** 구조를 따릅니다.
+
+```
+.
+├── backend/          #  FastAPI 기반의 메인 API 서버
+├── data-pipeline/    # 데이터 수집 및 처리를 위한 파이프라인
+├── db/               # 데이터베이스 초기화 스크립트 및 설정
+├── docs/             # 프로젝트 관련 문서
+├── docker-compose.yml  # 전체 서비스 실행을 위한 Docker Compose 파일
+└── README.md         # 프로젝트 안내 문서
+```
+
+각 폴더는 독립적인 애플리케이션으로 구성되어 있으며, 자세한 내용은 각 폴더의 `README.md`를 참고해주세요.
+
+---
+
+## ✨ Git 협업 워크플로우 (Git Workflow)
+
+우리 팀은 `Git-flow` 전략을 기반으로 협업을 진행합니다.
+
+- **`main`**: 🚢 **제품 출시**를 위한 브랜치입니다. 오직 `develop` 브랜치의 내용만 병합(Merge)하며, 직접적인 수정은 절대 금지합니다.
+- **`develop`**: ✨ **다음 버전 개발**을 위한 통합 브랜치입니다. 모든 기능 개발은 이 브랜치에서 시작하고, 완료된 기능은 이 브랜치로 다시 병합됩니다.
+- **`feature/{기능이름}`**: 📝 **신규 기능 개발**을 위한 브랜치입니다. `develop`에서 생성하며, 개발 완료 후 `develop`으로 PR(Pull Request)을 보냅니다. (예: `feature/login-api`)
+
+### 🤝 협업 절차
+1. `develop` 브랜치에서 최신 코드를 `pull` 받습니다.
+2. `feature/기능이름` 브랜치를 새로 생성합니다.
+3. 기능 개발을 완료하고 자신의 `feature` 브랜치에 커밋합니다.
+4. GitHub에서 `develop` 브랜치를 대상으로 **Pull Request(PR)**를 생성합니다.
+5. 다른 팀원 1명 이상에게 **코드 리뷰**를 받고 승인(Approve)을 받습니다.
+6. PR을 `develop` 브랜치에 병합(Merge)합니다.
+
+---
+
+## 🏁 시작하기 (Getting Started)
+
+프로젝트를 로컬 환경에서 실행하기 위한 절차입니다.
+
+### 1. 저장소 복제
+```bash
+git clone https://github.com/SeSAC-DA1/backend.git
+cd backend
+```
+
+### 2. 환경변수 설정
+각 컴포넌트의 `.env.example` 파일을 복사하여 `.env` 파일을 생성하고, 자신의 로컬 환경에 맞게 값을 수정합니다.
+
+- `backend/.env.example` -> `backend/.env`
+- `data-pipeline/.env.example` -> `data-pipeline/.env`
+
+**`backend/.env` 예시:**
+```
+DATABASE_URL="postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@localhost:5432/carfin"
+# ... 기타 Supabase 키 등
+```
+> **Note**: `docker-compose` 환경에서는 호스트 이름을 `localhost`가 아닌 Docker Compose 파일에 정의된 서비스 이름(예: `postgres`)으로 설정해야 합니다.
+
+### 3. 서비스 실행
+프로젝트 루트 디렉토리에서 아래 명령어를 실행하여 모든 서비스를 한 번에 시작합니다.
+```bash
+docker-compose up --build
+```
+- `--build` 옵션은 Docker 이미지를 새로 빌드한 후 컨테이너를 실행합니다. 코드 변경사항이 있을 때 사용합니다.
+
+### 4. API 문서 확인
+백엔드 서버가 정상적으로 실행되면, 아래 주소에서 자동으로 생성된 API 문서를 확인할 수 있습니다.
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+
+---
+
 ## 🛠️ 기술 스택 (Technology Stack)
 
 실무 환경과 동일한 기술 스택을 사용하여 확장 가능하고 안정적인 시스템을 구축합니다.
@@ -18,12 +91,10 @@
 | **백엔드** | `FastAPI` (Python), `Uvicorn` | AI 모델의 결과를 전달하고, 데이터를 처리하는 고성능 서버를 빠르게 구축합니다. |
 | (서버 & AI) | `Supabase` (Python SDK), `python-dotenv`, `pydantic`, `requests`, `httpx` | Supabase를 통한 인증, 환경 변수 관리, 데이터 유효성 검사, HTTP 통신을 처리합니다. |
 | | `psycopg2-binary`, `asyncpg`, `SQLAlchemy`, `Alembic` | PostgreSQL 데이터베이스 연동 및 마이그레이션을 위한 라이브러리입니다. |
-| | `redis` | 빠른 데이터 캐싱 및 세션 관리를 위해 사용합니다. |
 | | `scikit-learn`, `pandas`, `numpy` (AI/ML 라이브러리) | 차량 리스크 분석 및 **개인화된 차량 추천 시스템**과 같은 핵심 AI 모델을 개발하는 데 활용됩니다. 특히, **scikit-learn**은 다양한 머신러닝 알고리즘을 제공하여 추천 모델 구축에 적합합니다. |
 | **데이터베이스** | `PostgreSQL` | 실무에서 가장 널리 사용되는 관계형 데이터베이스로, 안정성과 확장성이 뛰어납니다. **Docker Compose로 직접 구축하여 완전한 제어권을 확보**합니다. |
 | **인증 시스템** | `Supabase Auth` | 구글 소셜 로그인 등 OAuth 인증 기능을 빠르게 구현하기 위해 사용합니다. |
-| **캐싱 & 세션** | `Redis` | 빠른 데이터 캐싱과 사용자 세션 관리를 위해 사용합니다. |
-| **인프라** | `Docker`, `docker-compose` | 어디서든 동일한 개발/실행 환경을 보장하고, **PostgreSQL, Redis 등 모든 서비스를 컨테이너로 관리**합니다. |
+| **인프라** | `Docker`, `docker-compose` | 어디서든 동일한 개발/실행 환경을 보장하고, **PostgreSQL 등 모든 서비스를 컨테이너로 관리**합니다. |
 | (개발 환경) | `Poetry` (Python 의존성 관리) | 백엔드(Python)에서 사용하는 수많은 라이브러리들의 버전을 깔끔하게 관리합니다. |
 | **테스트** | `pytest`, `pytest-asyncio` | 백엔드 API의 기능 및 비동기 테스트를 위한 프레임워크입니다. |
 
@@ -38,17 +109,15 @@
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Frontend      │    │   Backend       │    │   Database      │
 │   (Next.js)     │ ─► │   (FastAPI)     │ ─► │   (PostgreSQL)  │
-│   Port: 3000    │    │   Port:: 8000    │    │   Port: 5432    │
+│   Port: 3000    │    │   Port: 8000    │    │   Port: 5432    │
+│   (별도 개발)    │    │                 │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 ▼
-                    ┌─────────────────┐
-                    │     Redis       │
-                    │   (Cache)       │
-                    │   Port: 6379    │
-                    └─────────────────┘
 ```
+
+**현재 구성 (Backend + Database):**
+- Backend (FastAPI): `http://localhost:8000`
+- Database (PostgreSQL): `localhost:5432`
+- Frontend: 별도 개발 예정
 
 ### 💪 주요 장점
 - **완전한 제어권**: 데이터베이스 설정, 튜닝, 백업을 직접 관리
@@ -134,7 +203,7 @@
 
 1.  **기반 공사 (✅ 완료)**: 개발 환경 구축, Docker Compose 기반 인프라 구성 완료.
 2.  **인증 시스템 구축 (✅ 완료)**: Supabase Auth를 활용한 구글 소셜 로그인 구현 완료.
-3.  **데이터베이스 서버 구축 (🎯 진행 중)**: PostgreSQL + Redis를 Docker Compose로 구성, 테이블 생성.
+3.  **데이터베이스 서버 구축 (✅ 완료)**: PostgreSQL을 Docker Compose로 구성, 테이블 생성 완료.
 4.  **백엔드 API 개발**: 차량 데이터 CRUD, 추천 시스템, 금융 매칭 API 구현.
 5.  **데이터 수집 시스템**: 중고차 크롤링팀과 연동하여 대량 데이터 수집 파이프라인 구축.
 6.  **AI 모델 개발**: 차량 추천 및 리스크 분석 모델 개발 및 API 연동.
@@ -174,7 +243,6 @@ CarFin 백엔드 API는 FastAPI를 기반으로 하며, 자동으로 생성되�
 백엔드 서비스는 `.env` 파일을 통해 환경 변수를 관리합니다. `backend/backend/.env.example` 파일을 복사하여 `backend/backend/.env` 파일을 생성하고, 다음 필수 환경 변수를 설정해야 합니다:
 
 *   `DATABASE_URL`: PostgreSQL 데이터베이스 연결 URL (예: `postgresql+asyncpg://carfin_admin:carfin_secure_password_2025@postgres:5432/carfin`)
-*   `REDIS_URL`: Redis 서버 연결 URL (예: `redis://redis:6379/0`)
 *   `SUPABASE_URL`: Supabase 프로젝트 URL
 *   `SUPABASE_KEY`: Supabase 서비스 역할 키 (또는 공개 API 키)
 *   `ENVIRONMENT`: 애플리케이션 환경 (예: `development`, `production`)
