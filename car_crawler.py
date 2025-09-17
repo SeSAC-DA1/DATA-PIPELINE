@@ -1,375 +1,291 @@
-from datetime import datetime
+import re,json,time,random,requests
+from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import pandas as pd
-import requests
-import re
-import time
-import json
-from urllib.parse import urljoin, urlparse
 
-class KBChachachaCrawler:
-    def __init__(self):
-        self.base_url = "https://www.kbchachacha.com"
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ko-KR,ko;q=0.8,en-US;q=0.5,en;q=0.3',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        })
-        self.cars_data = []
-        
-    def get_car_list_page(self, page=1, region="", brand="", model="", year_from="", year_to="", price_from="", price_to=""):
-        """
-        KB차차차 중고차 매물 목록 페이지를 가져옵니다.
-        """
-        # 검색 파라미터 설정
-        params = {
-            'page': page,
-            'region': region,
-            'brand': brand,
-            'model': model,
-            'year_from': year_from,
-            'year_to': year_to,
-            'price_from': price_from,
-            'price_to': price_to
+KB_HOST = "https://www.kbchachacha.com"
+DETAIL_URL = f"{KB_HOST}/public/car/detail.kbc"
+MAKER_URL = f"{KB_HOST}/public/search/carMaker.json?page=1&sort=-orderDate"
+API_RECENT_URL = f"{KB_HOST}/public/car/common/recent/car/list.json"
+OPTION_LAYER_URL = f"{KB_HOST}/public/layer/car/option/list.kbc"
+OPTION_MASTER_URL = f"{KB_HOST}/public/car/option/code/list.json"
+
+IMG_BASE = "https://img.kbchachacha.com/IMG/carimg/l"
+
+
+#세션 생성
+def build_session() -> requests.Session:
+    s = requests.Session()
+    retries = Retry(
+        total=5,
+        connect=3,
+        read=3,
+        backoff_factor=0.7,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "POST"],
+    )
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    s.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept-Language": "ko-KR,ko;q=0.9",
         }
-        
-        # 빈 파라미터 제거
-        params = {k: v for k, v in params.items() if v}
-        
-        try:
-            # 중고차 매물 목록 URL (실제 URL은 사이트 구조에 따라 조정 필요)
-            url = f"{self.base_url}/used-car/list"
-            response = self.session.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            return response.text
-        except requests.RequestException as e:
-            print(f"페이지 요청 오류: {e}")
-            return None
+    )
+    return s
+
+#제조사 정보 수집해서 국산/수입 구분을 위한 매핑을 생성
+def get_maker_info(session: Optional[requests.Session] = None) -> Dict[str, Dict[str, Any]]:
     
-    def parse_car_list(self, html_content):
-        """
-        중고차 매물 목록 HTML을 파싱하여 차량 정보를 추출합니다.
-        """
-        soup = BeautifulSoup(html_content, 'html.parser')
-        cars = []
-        
-        # 차량 매물 리스트 선택자 (실제 사이트 구조에 따라 조정 필요)
-        car_items = soup.select('.car-item, .vehicle-item, .list-item')  # 여러 가능한 선택자 시도
-        
-        if not car_items:
-            # 다른 가능한 선택자들 시도
-            car_items = soup.select('[class*="car"], [class*="vehicle"], [class*="item"]')
-        
-        for item in car_items:
-            try:
-                car_info = self.extract_car_info(item)
-                if car_info:
-                    cars.append(car_info)
-            except Exception as e:
-                print(f"차량 정보 추출 오류: {e}")
-                continue
-                
-        return cars
-    
-    def extract_car_info(self, item):
-        """
-        개별 차량 매물에서 정보를 추출합니다.
-        """
-        car_info = {
-            'scraped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'source': 'KB차차차'
-        }
-        
-        try:
-            # 차량명 추출
-            title_selectors = [
-                '.car-title', '.vehicle-title', '.title', 
-                'h3', 'h4', '[class*="title"]'
-            ]
-            title = self.extract_text_by_selectors(item, title_selectors)
-            car_info['car_name'] = title
-            
-            # 가격 추출
-            price_selectors = [
-                '.price', '.car-price', '.vehicle-price',
-                '[class*="price"]', '.amount'
-            ]
-            price_text = self.extract_text_by_selectors(item, price_selectors)
-            car_info['price'] = self.clean_price(price_text)
-            
-            # 연식 추출
-            year_selectors = [
-                '.year', '.car-year', '.vehicle-year',
-                '[class*="year"]', '.model-year'
-            ]
-            year_text = self.extract_text_by_selectors(item, year_selectors)
-            car_info['year'] = self.clean_year(year_text)
-            
-            # 주행거리 추출
-            mileage_selectors = [
-                '.mileage', '.km', '.distance',
-                '[class*="mileage"]', '[class*="km"]'
-            ]
-            mileage_text = self.extract_text_by_selectors(item, mileage_selectors)
-            car_info['mileage'] = self.clean_mileage(mileage_text)
-            
-            # 연료 추출
-            fuel_selectors = [
-                '.fuel', '.fuel-type', '.energy',
-                '[class*="fuel"]', '[class*="energy"]'
-            ]
-            fuel_text = self.extract_text_by_selectors(item, fuel_selectors)
-            car_info['fuel_type'] = fuel_text
-            
-            # 지역 추출
-            location_selectors = [
-                '.location', '.region', '.area',
-                '[class*="location"]', '[class*="region"]'
-            ]
-            location_text = self.extract_text_by_selectors(item, location_selectors)
-            car_info['location'] = location_text
-            
-            # 상세 페이지 링크 추출
-            link_element = item.select_one('a')
-            if link_element:
-                href = link_element.get('href')
-                if href:
-                    car_info['detail_url'] = urljoin(self.base_url, href)
-            
-            # 이미지 URL 추출
-            img_element = item.select_one('img')
-            if img_element:
-                src = img_element.get('src') or img_element.get('data-src')
-                if src:
-                    car_info['image_url'] = urljoin(self.base_url, src)
-            
-            # 차량 ID 추출 (URL에서)
-            if 'detail_url' in car_info:
-                car_id = self.extract_car_id_from_url(car_info['detail_url'])
-                car_info['car_id'] = car_id
-            
-            return car_info
-            
-        except Exception as e:
-            print(f"차량 정보 추출 중 오류: {e}")
-            return None
-    
-    def extract_text_by_selectors(self, element, selectors):
-        """
-        여러 선택자를 시도하여 텍스트를 추출합니다.
-        """
-        for selector in selectors:
-            found = element.select_one(selector)
-            if found:
-                return found.get_text(strip=True)
-        return ""
-    
-    def clean_price(self, price_text):
-        """
-        가격 텍스트를 정리합니다.
-        """
-        if not price_text:
-            return None
-        
-        # 숫자만 추출
-        price_match = re.search(r'[\d,]+', price_text.replace(',', ''))
-        if price_match:
-            try:
-                return int(price_match.group().replace(',', ''))
-            except ValueError:
-                return None
-        return None
-    
-    def clean_year(self, year_text):
-        """
-        연식 텍스트를 정리합니다.
-        """
-        if not year_text:
-            return None
-        
-        # 4자리 연도 추출
-        year_match = re.search(r'20\d{2}', year_text)
-        if year_match:
-            return int(year_match.group())
-        return None
-    
-    def clean_mileage(self, mileage_text):
-        """
-        주행거리 텍스트를 정리합니다.
-        """
-        if not mileage_text:
-            return None
-        
-        # 숫자만 추출
-        mileage_match = re.search(r'[\d,]+', mileage_text.replace(',', ''))
-        if mileage_match:
-            try:
-                return int(mileage_match.group().replace(',', ''))
-            except ValueError:
-                return None
-        return None
-    
-    def extract_car_id_from_url(self, url):
-        """
-        URL에서 차량 ID를 추출합니다.
-        """
-        if not url:
-            return None
-        
-        # URL에서 ID 패턴 추출 (사이트 구조에 따라 조정)
-        id_patterns = [
-            r'/car/(\d+)',
-            r'/vehicle/(\d+)',
-            r'/detail/(\d+)',
-            r'id=(\d+)',
-            r'carId=(\d+)'
-        ]
-        
-        for pattern in id_patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        
-        return None
-    
-    def get_car_detail(self, detail_url):
-        """
-        차량 상세 페이지에서 추가 정보를 가져옵니다.
-        """
-        try:
-            response = self.session.get(detail_url, timeout=10)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            detail_info = {}
-            
-            # 상세 정보 추출 (사이트 구조에 따라 조정)
-            detail_selectors = {
-                'transmission': ['.transmission', '[class*="transmission"]'],
-                'engine': ['.engine', '[class*="engine"]'],
-                'color': ['.color', '[class*="color"]'],
-                'accident_history': ['.accident', '[class*="accident"]'],
-                'description': ['.description', '.detail', '[class*="description"]']
-            }
-            
-            for key, selectors in detail_selectors.items():
-                for selector in selectors:
-                    element = soup.select_one(selector)
-                    if element:
-                        detail_info[key] = element.get_text(strip=True)
-                        break
-            
-            return detail_info
-            
-        except Exception as e:
-            print(f"상세 정보 가져오기 오류: {e}")
+    s = session or build_session()
+    try:
+        r = s.get(MAKER_URL, timeout=10)
+        if r.status_code != 200:
+            print(f"❌ 제조사 정보 수집 실패: HTTP {r.status_code}")
             return {}
-    
-    def crawl_cars(self, max_pages=5, delay=1):
-        """
-        중고차 매물을 크롤링합니다.
-        """
-        print("KB차차차 중고차 매물 크롤링 시작...")
-        
-        for page in range(1, max_pages + 1):
-            print(f"페이지 {page} 크롤링 중...")
-            
-            # 페이지 가져오기
-            html_content = self.get_car_list_page(page=page)
-            if not html_content:
-                print(f"페이지 {page} 로드 실패")
-                continue
-            
-            # 차량 목록 파싱
-            cars = self.parse_car_list(html_content)
-            if not cars:
-                print(f"페이지 {page}에서 차량 정보를 찾을 수 없습니다.")
-                break
-            
-            print(f"페이지 {page}에서 {len(cars)}개 차량 발견")
-            
-            # 상세 정보 가져오기 (선택사항)
-            for car in cars:
-                if 'detail_url' in car:
-                    detail_info = self.get_car_detail(car['detail_url'])
-                    car.update(detail_info)
-                    time.sleep(delay)  # 서버 부하 방지
-            
-            self.cars_data.extend(cars)
-            
-            # 페이지 간 지연
-            time.sleep(delay)
-        
-        print(f"크롤링 완료! 총 {len(self.cars_data)}개 차량 수집")
-        return self.cars_data
-    
-    def save_to_csv(self, filename=None):
-        """
-        수집한 데이터를 CSV 파일로 저장합니다.
-        """
-        if not self.cars_data:
-            print("저장할 데이터가 없습니다.")
-            return
-        
-        if not filename:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'kb_chachacha_cars_{timestamp}.csv'
-        
-        df = pd.DataFrame(self.cars_data)
-        df.to_csv(filename, index=False, encoding='utf-8-sig')
-        print(f"데이터가 {filename}에 저장되었습니다.")
-        
-        return df
-    
-    def save_to_json(self, filename=None):
-        """
-        수집한 데이터를 JSON 파일로 저장합니다.
-        """
-        if not self.cars_data:
-            print("저장할 데이터가 없습니다.")
-            return
-        
-        if not filename:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'kb_chachacha_cars_{timestamp}.json'
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(self.cars_data, f, ensure_ascii=False, indent=2)
-        
-        print(f"데이터가 {filename}에 저장되었습니다.")
+        data = r.json()
+        maker_info: Dict[str, Dict[str, Any]] = {}
+        for maker in data.get("result", {}).get("국산", []):
+            maker_info[maker["makerCode"]] = {
+                "makerName": maker.get("makerName", ""),
+                "countryCode": maker.get("countryCode", ""),
+                "count": maker.get("count", 0),
+            }
+        for maker in data.get("result", {}).get("수입", []):
+            maker_info[maker["makerCode"]] = {
+                "makerName": maker.get("makerName", ""),
+                "countryCode": maker.get("countryCode", ""),
+                "count": maker.get("count", 0),
+            }
+        print(f"✅ 제조사 정보 수집 완료: 총 {len(maker_info)}개 제조사")
+        return maker_info
+    except Exception as e:
+        print(f"❌ 제조사 정보 수집 오류: {e}")
+        return {}
 
-def main():
-    """
-    메인 실행 함수
-    """
-    crawler = KBChachachaCrawler()
-    
-    # 크롤링 실행
-    cars_data = crawler.crawl_cars(max_pages=3, delay=2)  # 3페이지, 2초 지연
-    
-    if cars_data:
-        # 데이터 저장
-        df = crawler.save_to_csv()
-        crawler.save_to_json()
+
+def get_car_info_via_api(car_seqs: List[str], session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:
+    """API를 통해 차량 기본 정보를 수집합니다."""
+    s = session or build_session()
+    payload = {
+        "gotoPage": 1,
+        "pageSize": 30,
+        "carSeqVal": ",".join(car_seqs),
+    }
+    headers = {
+        "Accept": "*/*",
+        "Referer": f"{KB_HOST}/public/search/main.kbc",
+        "Host": "www.kbchachacha.com",
+    }
+    try:
+        r = s.post(API_RECENT_URL, data=payload, headers=headers, timeout=10)
+        if r.status_code != 200:
+            print(f"❌ API 오류: {r.status_code}")
+            return []
+        data = r.json()
+        return data.get("list", [])
+    except Exception as e:
+        print(f"❌ API 요청 실패: {e}")
+        return []
+
+
+# HTML에서 상세 정보를 파싱합니다. (연료/변속기/차종/색상/이미지/신차가격)
+def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] = None) -> Dict[str, Any]:
+    s = session or build_session()
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Referer": f"{KB_HOST}/public/search/main.kbc",
+    }
+    try:
+        r = s.get(DETAIL_URL, params={"carSeq": car_seq}, headers=headers, timeout=15)
+        if r.status_code != 200:
+            print(f"❌ HTML 요청 실패: {r.status_code}")
+            return {}
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # 기본정보 표 파싱
+        kv: Dict[str, str] = {}
+        for tr in soup.select(".detail-info-table tbody tr"):
+            tds = tr.select("th,td")
+            for i in range(0, len(tds), 2):
+                k = tds[i].get_text(strip=True)
+                v = tds[i + 1].get_text(strip=True) if i + 1 < len(tds) else ""
+                kv[k] = v
+
+        # 이미지 1장만 추출 (갤러리 → 썸네일 → og:image)
+        def _clean_img(u: str) -> str:
+            # 제거할 쿼리 파라미터 (?width= 등)
+            return u.split("?")[0]
+
+        image_url: Optional[str] = None
+        img_el = soup.select_one("#btnCarPhotoView img[src]") or soup.select_one("#bx-pager img[src]")
+        if img_el and img_el.get("src"):
+            image_url = _clean_img(img_el["src"])  # type: ignore
+        else:
+            og = soup.select_one('meta[property="og:image"]')
+            if og and og.get("content"):
+                image_url = _clean_img(og["content"])  # type: ignore
+
+        # 신차가격(newcarPrice) 파싱 (만원 단위, 부가세 10% 반영)
+        scripts_text = "\n".join(s.get_text() for s in soup.find_all("script"))
+        newcar_price: Optional[int] = None
+        m = re.search(r"var\s+newcarPrice\s*=\s*['\"](\d+)['\"]", scripts_text)
+        if m:
+            base = int(m.group(1))
+            newcar_price = int(base * 1.1)
+
+        return {
+            "fuel": kv.get("연료", ""),
+            "transmission": kv.get("변속기", ""),
+            "class": kv.get("차종", ""),
+            "color": kv.get("색상", ""),
+            "image_url": image_url or "",
+            "newcar_price": newcar_price,
+        }
+    except Exception as e:
+        print(f"❌ HTML 파싱 오류 (carSeq: {car_seq}): {e}")
+        return {}
+
+
+#옵션 정보 수집
+def get_car_options_from_html(car_seq: str, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:
+    s = session or build_session()
+    base_headers = {"Accept-Language": "ko-KR,ko;q=0.9"}
+    try:
+        # 상세로 세션 확보
+        s.get(DETAIL_URL, params={"carSeq": car_seq}, headers=base_headers, timeout=15)
+        # 레이어 POST
+        layer_headers = {
+            **base_headers,
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"{DETAIL_URL}?carSeq={car_seq}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "text/html, */*;q=0.1",
+        }
+        layer_res = s.post(OPTION_LAYER_URL, data={"carSeq": car_seq}, headers=layer_headers, timeout=15)
+        if layer_res.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(layer_res.text, "html.parser")
+        hidden = soup.select_one("input#carOption")
+        codes = [c for c in (hidden["value"].split(",") if hidden and hidden.has_attr("value") else []) if c]
+
+        # 마스터 POST
+        master_headers = {
+            **base_headers,
+            "Accept": "application/json, text/plain, */*",
+            "X-Requested-With": "XMLHttpRequest",
+            "x-ajax": "true",
+            "Referer": OPTION_LAYER_URL,
+        }
+        master_res = s.post(OPTION_MASTER_URL, headers=master_headers, timeout=15)
+        if master_res.status_code != 200:
+            return []
+        data = master_res.json()
+        master = data["optionList"] if isinstance(data, dict) else data
+        code_to_meta = {m["optionCode"]: m for m in master}
+
+        equipped = [code_to_meta[c] for c in codes if c in code_to_meta]
+        return [
+            {"code": o["optionCode"], "name": o["optionName"], "group": o.get("optionGbnName", "")}
+            for o in equipped
+        ]
+    except Exception as e:
+        print(f"❌ 옵션 파싱 오류 (carSeq: {car_seq}): {e}")
+        return []
+
+# DB 테이블 구조에 맞는 차량 레코드를 생성
+def create_vehicle_record(api_data: Dict[str, Any], html_data: Dict[str, Any],  maker_info: Dict[str, Dict[str, Any]], session: Optional[requests.Session] = None) -> Dict[str, Any]:
+    car_seq = api_data.get("carSeq", "")
+    maker_code = api_data.get("makerCode", "")
+    country_code = maker_info.get(maker_code, {}).get("countryCode", "알수없음")
+
+    price = api_data.get("sellAmt", 0)
+
+    record = {
+        "VehicleId": None,
+        "VehicleNo": api_data.get("carNo", ""),
+        "CarSeq": car_seq,
+        "Platform": "kbchachacha",
+        "Origin": country_code,
+        "CarType": html_data.get("class", "기타"),
+        "Manufacturer": api_data.get("makerName", ""),
+        "Model": api_data.get("className", ""),
+        "Generation": api_data.get("carName", ""),
+        "Trim": api_data.get("gradeName", ""),
+        "FuelType": html_data.get("fuel", "") or api_data.get("gasName", ""),
+        "Transmission": html_data.get("transmission", "") or api_data.get("transmission", ""),
+        "ColorName": html_data.get("color", "") or api_data.get("color", ""),
+        "ModelYear": api_data.get("yymm", ""),
+        "FirstRegistrationDate": api_data.get("regiDay", ""),
+        "Distance": api_data.get("km", 0),
+        "Price": price,
+        "OriginPrice": html_data.get("newcar_price", None), 
+        "SellType": "일반",
+        "Location": api_data.get("cityName", ""),
+        "DetailURL": f"{DETAIL_URL}?carSeq={car_seq}",
+        "Photo": html_data.get("image_url", ""),
+    }
+    return record
+
+
+def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0) -> List[Dict[str, Any]]:
+    """완전한 차량 정보를 크롤링합니다."""
+    print(f"🚀 완전한 차량 정보 크롤링 시작 (총 {len(car_seqs)}대)")
+    session = build_session()
+
+    print("📋 제조사 정보 수집 중...")
+    maker_info = get_maker_info(session=session)
+
+    print("🔍 API를 통한 기본 정보 수집 중...")
+    api_data_list = get_car_info_via_api(car_seqs, session=session)
+    if not api_data_list:
+        print("❌ API 데이터 수집 실패")
+        return []
+    print(f"✅ API 데이터 수집 완료: {len(api_data_list)}대")
+
+    by_seq = {str(item.get("carSeq", "")): item for item in api_data_list}
+
+    complete_records: List[Dict[str, Any]] = []
+    for i, seq in enumerate(car_seqs, 1):
+        api_data = by_seq.get(str(seq), {})
+        print(f"\n📄 {i}/{len(car_seqs)} - carSeq: {seq} 처리 중...")
+
+        html_data = get_car_detail_from_html(str(seq), session=session)
         
-        # 데이터 미리보기
-        print("\n=== 수집된 데이터 미리보기 ===")
-        print(df.head())
-        print(f"\n총 {len(df)}개 차량 데이터 수집 완료")
-        
-        # 기본 통계
-        if 'price' in df.columns:
-            print(f"\n가격 통계:")
-            print(f"평균 가격: {df['price'].mean():,.0f}원")
-            print(f"최저 가격: {df['price'].min():,.0f}원")
-            print(f"최고 가격: {df['price'].max():,.0f}원")
-    else:
-        print("수집된 데이터가 없습니다.")
+
+        record = create_vehicle_record(api_data, html_data,  maker_info, session=session)
+        complete_records.append(record)
+
+        print(
+            f"   ✅ 완료: {record['Manufacturer']} {record['Model']} {record['Generation']} | "
+            f"💰 {record['Price']}만원, 🚗 {record['Distance']:,}km, 🖼️ {'OK' if record['Photo'] else 'NO PHOTO'}"
+        )
+
+        if i < len(car_seqs):
+            time.sleep(delay + random.uniform(0.2, 0.8))
+
+    print(f"\n🎉 크롤링 완료! 총 {len(complete_records)}대의 완전한 정보 수집")
+    return complete_records
+
 
 if __name__ == "__main__":
-    main()
+    # 예시 실행
+    test_car_seqs = ["27490092", "27483488", "27471263"]
+    records = crawl_complete_car_info(test_car_seqs, delay=1.5)
+
+
+    # DataFrame 확인
+    df = pd.DataFrame(records)
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.width', 200)
+    print("\n📊 데이터프레임 미리보기:")
+    print(df)
+    print(f"\nShape: {df.shape}")
+
+
+
