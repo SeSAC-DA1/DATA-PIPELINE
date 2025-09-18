@@ -54,6 +54,14 @@ class VehicleSearch(BaseModel):
     max_price: Optional[int] = None
     max_mileage: Optional[int] = None
 
+class UserVehicleSearch(BaseModel):
+    """사용자 친화적 차량 검색 스키마"""
+    budget: Optional[int] = None  # 예산 (만원)
+    fuelType: Optional[str] = None  # 연료 타입
+    purpose: Optional[str] = None  # 사용 목적
+    location: Optional[str] = None  # 지역
+    preferences: Optional[list] = None  # 선호사항 배열
+
 @router.post("/vehicles", response_model=VehicleResponse)
 async def create_vehicle(
     vehicle_data: VehicleCreate,
@@ -194,6 +202,99 @@ async def search_vehicles(
         return vehicles
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"차량 검색 실패: {str(e)}")
+
+@router.post("/vehicles/search/user", response_model=List[VehicleResponse])
+async def search_vehicles_by_user_profile(
+    search_params: UserVehicleSearch,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, le=1000),
+    db: AsyncSession = Depends(get_database_session)
+):
+    """
+    사용자 프로필 기반 차량 검색 (3-agent system용)
+    """
+    try:
+        query = select(Vehicle)
+        filters = []
+
+        # 예산 기반 가격 필터
+        if search_params.budget:
+            max_budget = int(search_params.budget * 1.1)  # 10% 여유
+            min_budget = int(search_params.budget * 0.7)  # 30% 할인 고려
+            filters.append(Vehicle.price.between(min_budget, max_budget))
+
+        # 연료 타입 필터 (details JSONB 컬럼 활용)
+        if search_params.fuelType:
+            if search_params.fuelType in ['가솔린', 'gasoline']:
+                filters.append(Vehicle.details['fuel_type'].astext.ilike('%gasoline%'))
+            elif search_params.fuelType in ['디젤', 'diesel']:
+                filters.append(Vehicle.details['fuel_type'].astext.ilike('%diesel%'))
+            elif search_params.fuelType in ['하이브리드', 'hybrid']:
+                filters.append(Vehicle.details['fuel_type'].astext.ilike('%hybrid%'))
+            elif search_params.fuelType in ['전기차', 'electric']:
+                filters.append(Vehicle.details['fuel_type'].astext.ilike('%electric%'))
+
+        # 사용 목적에 따른 차량 타입 매핑
+        if search_params.purpose:
+            if search_params.purpose in ['출퇴근', 'commute', '시내운전']:
+                # 소형차, 경차 우선
+                filters.append(or_(
+                    Vehicle.details['category'].astext.ilike('%compact%'),
+                    Vehicle.details['category'].astext.ilike('%sedan%')
+                ))
+            elif search_params.purpose in ['가족여행', 'family', '대가족']:
+                # SUV, MPV 우선
+                filters.append(or_(
+                    Vehicle.details['category'].astext.ilike('%suv%'),
+                    Vehicle.details['category'].astext.ilike('%mpv%')
+                ))
+            elif search_params.purpose in ['레저', 'leisure', '캠핑']:
+                # SUV, 픽업트럭 우선
+                filters.append(or_(
+                    Vehicle.details['category'].astext.ilike('%suv%'),
+                    Vehicle.details['category'].astext.ilike('%pickup%')
+                ))
+
+        # 선호사항 처리
+        if search_params.preferences:
+            preference_filters = []
+            for pref in search_params.preferences:
+                if pref in ['저연비', 'fuel_efficient']:
+                    preference_filters.append(Vehicle.details['fuel_efficiency'].astext.cast(Float) > 10.0)
+                elif pref in ['안전성', 'safety']:
+                    preference_filters.append(Vehicle.details['safety_rating'].astext.cast(Float) >= 4.0)
+                elif pref in ['럭셔리', 'luxury']:
+                    preference_filters.append(Vehicle.details['luxury_features'].astext != 'null')
+                elif pref in ['스포츠', 'sports']:
+                    preference_filters.append(Vehicle.details['performance'].astext != 'null')
+
+            if preference_filters:
+                filters.append(or_(*preference_filters))
+
+        # 기본 품질 필터 (사고이력, 침수이력 제외)
+        filters.append(or_(
+            Vehicle.details['accident_history'].astext == 'false',
+            Vehicle.details['accident_history'].astext.is_(None)
+        ))
+        filters.append(or_(
+            Vehicle.details['flood_history'].astext == 'false',
+            Vehicle.details['flood_history'].astext.is_(None)
+        ))
+
+        if filters:
+            query = query.where(and_(*filters))
+
+        # 리스크 스코어 기준 정렬 (낮을수록 좋음), 가격 순
+        query = query.order_by(Vehicle.risk_score.asc().nulls_last(), Vehicle.price.asc())
+        query = query.offset(skip).limit(limit)
+
+        result = await db.execute(query)
+        vehicles = result.scalars().all()
+
+        return vehicles
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"사용자 기반 차량 검색 실패: {str(e)}")
 
 @router.delete("/vehicles/{vehicle_id}")
 async def delete_vehicle(
