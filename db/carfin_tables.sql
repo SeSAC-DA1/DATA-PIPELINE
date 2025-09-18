@@ -1,32 +1,30 @@
 -- 1. 엔카 차량 크롤링 목록
 CREATE TABLE IF NOT EXISTS vehicles (
-    vehicleId INT NOT NULL,         -- 차량 고유 ID
-    Market VARCHAR(16),             -- 국내차/외제차
-    Manufacturer VARCHAR(100),      -- 제조사
-    Model VARCHAR(150),             -- 모델명
-    Category VARCHAR(150),          -- 차종
-    Badge VARCHAR(100),             -- 트림/등급
-    BadgeDetail VARCHAR(150),       -- 트림 상세
-    Transmission VARCHAR(50),       -- 변속기
-    FuelType VARCHAR(50),           -- 연료
-    Year INT,                       -- 최초등록연도 (연식)
-    Mileage INT,                    -- 주행거리 (㎞)
-    Price INT,                      -- 판매가 (원)
-    SellType VARCHAR(50),           -- 판매형태 (일반/리스 등)
-    OfficeCityState VARCHAR(100),   -- 차량 소재지
-    detail_url VARCHAR(1024),       -- 상세 페이지 URL
-    Photo VARCHAR(1024),            -- 차량 이미지 URL
-    PRIMARY KEY (vehicleId)
+    vehicleId INT NOT NULL AUTO_INCREMENT,         -- 내부 PK
+    encarId   INT NOT NULL,                        -- Encar 고유 ID
+    vehicleNo VARCHAR(20),                         -- 차량 번호판
+    Market VARCHAR(16),                            -- 국내차/외제차
+    Category VARCHAR(50),                          -- 차종
+    Manufacturer VARCHAR(100),                     -- 제조사
+    Model VARCHAR(150),                            -- 모델명
+    Badge VARCHAR(100),                            -- 트림/등급
+    BadgeDetail VARCHAR(150),                      -- 트림 상세
+    ColorName VARCHAR(50),                         -- 색상
+    Transmission VARCHAR(50),                      -- 변속기
+    FuelType VARCHAR(50),                          -- 연료
+    Year INT,                                      -- 최초등록연도
+    Mileage INT,                                   -- 주행거리 (km)
+    Price INT,                                     -- 판매가
+    OriginPrice INT,                               -- 신차판매가
+    SellType VARCHAR(50),                          -- 판매형태
+    OfficeCityState VARCHAR(100),                  -- 소재지
+    detail_url VARCHAR(1024),                      -- 상세 URL
+    Photo VARCHAR(1024),                           -- 대표 이미지 URL
+    PRIMARY KEY (vehicleId),
+    UNIQUE KEY unique_encarId (encarId)
 );
 
--- 2. 차량Id + 차량번호
-CREATE TABLE IF NOT EXISTS vehicles_info (
-    vehicleId INT PRIMARY KEY,    -- 차량 고유 ID
-    vehicleNo VARCHAR(20),        -- 차량 번호판
-    FOREIGN KEY (vehicleId) REFERENCES vehicles(vehicleId)
-);
-
--- 3. 성능점검표 목록
+-- 2. 성능점검표 목록
 CREATE TABLE IF NOT EXISTS vehicles_inspect (
     vehicleId INT PRIMARY KEY,    -- 차량 고유 ID
     WarrantyType VARCHAR(50),     -- 보증유형
@@ -39,7 +37,7 @@ CREATE TABLE IF NOT EXISTS vehicles_inspect (
     FOREIGN KEY (vehicleId) REFERENCES vehicles(vehicleId)
 );
 
--- 4. 보험이력 목록
+-- 3. 보험이력 목록
 CREATE TABLE IF NOT EXISTS vehicles_insurance (
     vehicleId INT PRIMARY KEY,    -- 차량 고유 ID
     vehicleNo VARCHAR(20),        -- 차량번호
