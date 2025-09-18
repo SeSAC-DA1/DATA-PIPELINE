@@ -319,21 +319,19 @@ def enrich_with_readside(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -> p
 # -----------------------------------------------------------------------------
 def fetch_open_record_detail(s: requests.Session, car_seq: int, vehicle_no: str):
     if not vehicle_no:
-        return None, None
+        return None
     url = f"https://api.encar.com/v1/readside/record/vehicle/{car_seq}/open"
     try:
         r = s.get(url, params={"vehicleNo": vehicle_no}, timeout=8)
         if not r.ok:
-            return None, None
+            return None
         j = r.json()
-        year = _parse_year(j.get("year"))
         first = _parse_yyyymmdd(j.get("firstDate"))
-        return year, first
+        return first
     except Exception:
-        return None, None
+        return None
 
 def enrich_with_open_record(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -> pd.DataFrame:
-    # VehicleNo 가 있어야 호출 가능 → attach_vehicle_no 이후에 호출할 것
     if df.empty or "CarSeq" not in df.columns or "VehicleNo" not in df.columns:
         return df
 
@@ -341,31 +339,26 @@ def enrich_with_open_record(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -
     carseq_list = df["CarSeq"].tolist()
     vehno_list = df["VehicleNo"].tolist()
 
-    res_y = [None] * len(df)
     res_f = [None] * len(df)
 
     def _job(idx, cs, vn):
         if pd.isna(cs) or (not isinstance(vn, str)) or (not vn.strip()):
-            return idx, None, None
-        y, f = fetch_open_record_detail(s, int(cs), vn.strip())
+            return idx, None
+        f = fetch_open_record_detail(s, int(cs), vn.strip())
         if throttle_sec > 0:
             time.sleep(throttle_sec)
-        return idx, y, f
+        return idx, f
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {
-            ex.submit(_job, idx, carseq_list[idx], vehno_list[idx]): idx
-            for idx in range(len(df))
-        }
+        futures = {ex.submit(_job, idx, carseq_list[idx], vehno_list[idx]): idx for idx in range(len(df))}
         for fut in as_completed(futures):
-            idx, y, f = fut.result()
-            res_y[idx] = y
+            idx, f = fut.result()
             res_f[idx] = f
 
     out = df.copy()
-    out["ModelYear"] = pd.Series(res_y, index=out.index, dtype="Int64")
     out["FirstRegistrationDate"] = pd.Series(res_f, index=out.index, dtype="Int64")
     return out
+
 
 # -----------------------------------------------------------------------------
 # 정규화 (스키마에 맞는 컬럼만 생성)
@@ -401,6 +394,7 @@ def shape_rows(df_raw: pd.DataFrame, pageid: str, category_fallback: str, market
     df["Trim"] = df_raw.get("BadgeDetail").astype("string") if "BadgeDetail" in df_raw else pd.Series(dtype="string")
     df["FuelType"] = df_raw.get("FuelType").astype("string") if "FuelType" in df_raw else pd.Series(dtype="string")
     df["Transmission"] = df_raw.get("Transmission").astype("string") if "Transmission" in df_raw else pd.Series(dtype="string")
+    df["ModelYear"] = df_raw.get("FormYear").apply(to_int_safe).astype("Int64") if "FormYear" in df_raw else pd.Series(dtype="Int64")
     df["Distance"] = (df_raw.get("Mileage").apply(to_int_safe).astype("Int64") if "Mileage" in df_raw else pd.Series(dtype="Int64"))
     df["Price"] = df_raw.get("Price").apply(to_int_safe).astype("Int64") if "Price" in df_raw else pd.Series(dtype="Int64")
     df["SellType"] = df_raw.get("SellType").astype("string") if "SellType" in df_raw else pd.Series(dtype="string")
@@ -412,7 +406,6 @@ def shape_rows(df_raw: pd.DataFrame, pageid: str, category_fallback: str, market
     df["VehicleNo"] = pd.Series([None] * len(df), dtype="string")
     df["OriginPrice"] = pd.Series([None] * len(df), dtype="Int64")
     df["ColorName"] = pd.Series([None] * len(df), dtype="string")
-    df["ModelYear"] = pd.Series([None] * len(df), dtype="Int64")
     df["FirstRegistrationDate"] = pd.Series([None] * len(df), dtype="Int64")
 
     return df[WANTED_COLS]
@@ -458,7 +451,7 @@ def crawl_market_to_mysql(
             if fetch_vehicle_no:
                 shaped = attach_vehicle_no(shaped, max_workers=vehno_workers, throttle_sec=vehno_throttle)
 
-            # 2) open record(차량 세부정보)로 연식/최초등록일 수집
+            # 2) open record(차량 세부정보)로 최초등록일 수집
             shaped = enrich_with_open_record(shaped, max_workers=detail_workers, throttle_sec=detail_throttle)
 
             # 3) readside(category/spec)로 출시가/색상 수집
@@ -475,7 +468,6 @@ def crawl_market_to_mysql(
     print(f"[{market_key}] 총 {total_saved:,}건 UPSERT 완료 → vehicles")
 
 def main():
-    # 국내/수입 모두 수집
     crawl_market_to_mysql(
         "korean",
         KOR_CATEGORIES,
