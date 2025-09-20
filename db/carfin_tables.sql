@@ -1,27 +1,29 @@
--- 1. 엔카 차량 크롤링 목록
+-- 1. 차량 정보테이블
 CREATE TABLE IF NOT EXISTS vehicles (
-    vehicleId INT NOT NULL AUTO_INCREMENT,         -- 내부 PK
-    encarId   INT NOT NULL,                        -- Encar 고유 ID
-    vehicleNo VARCHAR(20),                         -- 차량 번호판
-    Market VARCHAR(16),                            -- 국내차/외제차
-    Category VARCHAR(50),                          -- 차종
-    Manufacturer VARCHAR(100),                     -- 제조사
-    Model VARCHAR(150),                            -- 모델명
-    Badge VARCHAR(100),                            -- 트림/등급
-    BadgeDetail VARCHAR(150),                      -- 트림 상세
-    ColorName VARCHAR(50),                         -- 색상
-    Transmission VARCHAR(50),                      -- 변속기
-    FuelType VARCHAR(50),                          -- 연료
-    Year INT,                                      -- 최초등록연도
-    Mileage INT,                                   -- 주행거리 (km)
-    Price INT,                                     -- 판매가
-    OriginPrice INT,                               -- 신차판매가
-    SellType VARCHAR(50),                          -- 판매형태
-    OfficeCityState VARCHAR(100),                  -- 소재지
-    detail_url VARCHAR(1024),                      -- 상세 URL
-    Photo VARCHAR(1024),                           -- 대표 이미지 URL
-    PRIMARY KEY (vehicleId),
-    UNIQUE KEY unique_encarId (encarId)
+    VehicleId INT NOT NULL AUTO_INCREMENT,   -- 차량 고유 ID (내부 PK)
+    CarSeq INT NOT NULL,                     -- 내부 식별자
+    VehicleNo VARCHAR(20) NOT NULL,          -- 차량번호판
+    Platform VARCHAR(16),                    -- 플랫폼 
+    Origin VARCHAR(16),                      -- 시장 (국산/수입)
+    CarType VARCHAR(16),                     -- 차종
+    Manufacturer VARCHAR(20),                -- 제조사
+    Model  VARCHAR(50),                      -- 모델명
+    Generation VARCHAR(50),                  -- 세대(Badge)
+    Trim VARCHAR(50),                        -- 트림(BadgeDetail)
+    FuelType VARCHAR(16),                    -- 연료
+    Transmission VARCHAR(16),                -- 변속기
+    ColorName VARCHAR(50),                   -- 차량색상
+    ModelYear INT,                           -- 차량연식
+    FirstRegistrationDate INT,               -- 차량등록일
+    Distance INT,                            -- 주행거리 (km)
+    Price INT,                               -- 판매가
+    OriginPrice INT,                         -- 출시가 
+    SellType VARCHAR(50),                    -- 판매형태
+    Location VARCHAR(20),                    -- 차량소재지
+    DetailURL VARCHAR(1024),                 -- 상세 페이지 URL
+    Photo VARCHAR(1024),                     -- 차량 이미지 URL
+    PRIMARY KEY (VehicleId),
+    UNIQUE KEY uniq_vehicle_no (VehicleNo)
 );
 
 -- 2. 성능점검표 목록

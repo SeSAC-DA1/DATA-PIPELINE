@@ -9,6 +9,7 @@
     
     # Python
     backend/__pycache__
+    model/__pycache__
     backend/.venv
     backend/venv
     

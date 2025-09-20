@@ -6,7 +6,7 @@ user_input = {
     "Year": 2018, "Weight_Year": 0.2,
     "Mileage": 50000, "Weight_Mileage": 0.2,
     "Category": "SUV", "Weight_Category": 0.1,
-    "FuelType": "디젤", "Weight_FuelType": 0.1,
+    "FuelType": "하이브리드", "Weight_FuelType": 0.1,
     "Transmission": "자동", "Weight_Transmission": 0.1,
     "AccidentHistory": "무사고", "Weight_AccidentHistory": 0.2,
     "isDisclosed": 1, "Weight_isDisclosed": 0.1
