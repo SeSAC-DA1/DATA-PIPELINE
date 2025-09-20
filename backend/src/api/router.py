@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .endpoints import users, auth, vehicles, agents, simple_agents
+from .endpoints import users, auth, vehicles, agents, simple_agents, recommendations
 
 # 메인 API 라우터를 생성합니다.
 api_router = APIRouter()
@@ -18,6 +18,12 @@ api_router.include_router(simple_agents.router, prefix="/chat", tags=["Simple AI
 
 # AI 에이전트 라우터 추가
 api_router.include_router(agents.router, prefix="/agents", tags=["AI Agents"])
+
+# 추천 시스템 API 추가
+api_router.include_router(recommendations.router, prefix="", tags=["recommendations"])
+
+# TODO: Gemini 멀티에이전트 통합 API 엔드포인트 추가 예정
+# TODO: MCP 서버 연동 API 엔드포인트 추가 예정
 
 # 만약 다른 엔드포인트 파일(예: products.py)이 있다면 아래와 같이 추가합니다.
 # from backend.api.endpoints import products
