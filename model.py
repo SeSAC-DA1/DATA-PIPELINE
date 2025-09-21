@@ -9,7 +9,7 @@ class Vehicle(Base):
     
     vehicleid = Column(Integer, primary_key=True, autoincrement=True)
     carseq = Column(Integer, nullable=False)
-    vehicleno = Column(Integer, nullable=False, unique=True)
+    vehicleno = Column(String, nullable=False, unique=True)
     platform = Column(String)
     origin = Column(String)
     cartype = Column(String)
