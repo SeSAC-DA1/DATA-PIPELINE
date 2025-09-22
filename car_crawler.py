@@ -1,18 +1,12 @@
-import re,json,time,random,requests,os
+import re,json,time,requests
 from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from urllib.parse import urlencode
-import pandas as pd
-from connection import session_scope, Engine
-from model import Vehicle, Base
+from connection import session_scope
+from model import Vehicle
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import gc 
 
 # =============================================================================
 # 상수 및 설정
@@ -102,11 +96,12 @@ def get_existing_car_seqs() -> set:
 # 데이터 수집 함수들 (API 호출)
 # =============================================================================
 
-def get_total_car_count() -> int:
-    """전체 차량 수를 가져옵니다."""
+def get_total_car_count(session: Optional[requests.Session] = None) -> int:
+    """전체 차량 수를 가져옵니다. (세션 재사용)"""
+    s = session or build_session()
     url = "https://www.kbchachacha.com/public/common/top/data/search.json"
     try:
-        response = requests.post(url, timeout=10)
+        response = s.post(url, timeout=10)
         if response.status_code == 200:
             data = response.json()
             return data.get("carCount", 0)
@@ -226,7 +221,7 @@ def get_car_info_via_api(car_seqs: List[str], session: Optional[requests.Session
             print(f"[배치 {i//batch_size + 1}] {len(batch_results)}개 수집")
             
             # 배치 간 대기
-            time.sleep(0.5)
+            time.sleep(0.2)
             
         except json.JSONDecodeError as e:
             print(f"[JSON 파싱 오류] 배치 {i//batch_size + 1}: {e}")
@@ -596,7 +591,7 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
         
         print(f"[DB 저장 완료] {saved_count}건 저장, {skipped_count}건 건너뜀")
 
-def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.5, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:
+def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:
     """완전한 차량 정보를 크롤링합니다."""
     print(f"[차량 정보 크롤링 시작] 총 {len(car_seqs)}대")
     s = session or build_session()
@@ -648,7 +643,7 @@ def crawl_smart_strategy():
     session = build_session()
     
     print("[전체 차량 수 확인 중...]")
-    total_count = get_total_car_count()
+    total_count = get_total_car_count(session)
     print(f"전체 차량 수: {total_count:,}대")
     
     print("[제조사별 정보 수집 중...]")
@@ -687,7 +682,7 @@ def crawl_smart_strategy():
                     
                     # 2. 상세 정보 크롤링
                     print(f"    [{class_name}] 상세 정보 크롤링 시작...")
-                    records = crawl_complete_car_info(car_seqs, delay=1.5, session=session)
+                    records = crawl_complete_car_info(car_seqs, delay=1.0, session=session)
                     
                     # 3. DB 저장
                     if records:
@@ -710,7 +705,7 @@ def crawl_smart_strategy():
                 
                 # 2. 상세 정보 크롤링
                 print(f"  [{maker_name}] 상세 정보 크롤링 시작...")
-                records = crawl_complete_car_info(car_seqs, delay=1.5, session=session)
+                records = crawl_complete_car_info(car_seqs, delay=1.0, session=session)
                 
                 # 3. DB 저장
                 if records:
@@ -731,7 +726,6 @@ def crawl_smart_strategy():
 # =============================================================================
 
 if __name__ == "__main__":
-    # 스마트 크롤링 전략 실행 (각 제조사/클래스별로 즉시 처리)
     print("[크롤링 시작]")
     total_processed = crawl_smart_strategy()
     
