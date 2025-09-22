@@ -637,7 +637,7 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
 # 메인 크롤링 전략 함수들
 # =============================================================================
 
-def crawl_smart_strategy():
+def crawl_kb_chachacha():
     """스마트 크롤링 전략: 각 제조사/클래스별로 즉시 상세 크롤링 + 저장 완료"""
     total_processed = 0
     session = build_session()
@@ -671,7 +671,7 @@ def crawl_smart_strategy():
                 print(f"  - [{class_name}] {class_count:,}대 ({pages_needed}페이지)")
                 
                 if pages_needed > 250:
-                    print(f"    ⚠️ {class_name}은 250페이지 초과! 차량명별 세분화 필요")
+                    print(f"    경고: {class_name}은 250페이지 초과! 차량명별 세분화 필요")
                     # 아직 차량명 별 세분화 필요가 없어서 구현 안함.
                 
                 # 1. carSeq 수집
@@ -689,11 +689,11 @@ def crawl_smart_strategy():
                         print(f"    [{class_name}] DB 저장 시작...")
                         save_car_info_to_db(records)
                         total_processed += len(records)
-                        print(f"    ✅ {class_name} 완료: {len(records)}건 저장")
+                        print(f"    {class_name} 완료: {len(records)}건 저장")
                     else:
-                        print(f"    ❌ {class_name} 상세 정보 크롤링 실패")
+                        print(f"    {class_name} 상세 정보 크롤링 실패")
                 else:
-                    print(f"    ❌ {class_name} carSeq 수집 실패")
+                    print(f"    {class_name} carSeq 수집 실패")
         else:
             print(f"[{maker_name}] 10,000대 이하 - 제조사별 크롤링")
             
@@ -712,11 +712,11 @@ def crawl_smart_strategy():
                     print(f"  [{maker_name}] DB 저장 시작...")
                     save_car_info_to_db(records)
                     total_processed += len(records)
-                    print(f"✅ {maker_name} 완료: {len(records)}건 저장")
+                    print(f"{maker_name} 완료: {len(records)}건 저장")
                 else:
-                    print(f"❌ {maker_name} 상세 정보 크롤링 실패")
+                    print(f"{maker_name} 상세 정보 크롤링 실패")
             else:
-                print(f"❌ {maker_name} carSeq 수집 실패")
+                print(f"{maker_name} carSeq 수집 실패")
     
     print(f"\n[전체 크롤링 완료] 총 {total_processed:,}건 처리됨")
     return total_processed
@@ -727,7 +727,7 @@ def crawl_smart_strategy():
 
 if __name__ == "__main__":
     print("[크롤링 시작]")
-    total_processed = crawl_smart_strategy()
+    total_processed = crawl_kb_chachacha()
     
     if total_processed > 0:
         print(f"[전체 크롤링 성공] 총 {total_processed:,}건 처리 완료")
