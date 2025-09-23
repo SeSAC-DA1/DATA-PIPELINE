@@ -1,28 +1,19 @@
 import os, re, time
 import pandas as pd
 import requests
-
 from requests.adapters import HTTPAdapter, Retry
-from sqlalchemy import create_engine, MetaData, Table
-from sqlalchemy.dialects.mysql import insert as mysql_insert
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dotenv import load_dotenv
+from connection import session_scope
+from model import Vehicle
 
-# -----------------------------------------------------------------------------
-# 경로 / 환경
-# -----------------------------------------------------------------------------
-if '__file__' in globals():
-    REPO_ROOT = Path(__file__).resolve().parent.parent
-else:
-    REPO_ROOT = Path.cwd().parent
-
-ENV_PATH = REPO_ROOT.parent / ".env"
-load_dotenv(dotenv_path=ENV_PATH); load_dotenv()
+# =============================================================================
+# 상수 및 설정
+# =============================================================================
 
 BASE_URL = "https://api.encar.com/search/car/list/premium"
 KOR_CATEGORIES = ["경차", "소형차", "준중형차", "중형차", "대형차", "스포츠카", "SUV", "RV", "승합차", "화물차"]
-MARKET = {
+
+MARKET_CONFIG = {
     "korean": {
         "car_type": "Y",
         "referer": "https://www.encar.com/dc/dc_carsearchlist.do",
@@ -35,90 +26,19 @@ MARKET = {
     },
 }
 
-# -----------------------------------------------------------------------------
-# HTTP 세션
-# -----------------------------------------------------------------------------
-def make_session(referer: str) -> requests.Session:
-    s = requests.Session()
-    s.trust_env = False
-    retries = Retry(
-        total=5,
-        backoff_factor=1.2,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    s.mount("https://", HTTPAdapter(max_retries=retries))
-    s.headers.update(
-        {
-            "user-agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/140.0.0.0 Safari/537.36"
-            ),
-            "accept": "application/json, text/plain, */*",
-            "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-            "origin": "https://www.encar.com",
-            "referer": referer,
-        }
-    )
-    return s
+WANTED_COLS = [
+    "CarSeq", "VehicleNo", "Platform", "Origin", "CarType", "Manufacturer", "Model", 
+    "Generation", "Trim", "FuelType", "Transmission", "ColorName", "ModelYear", 
+    "FirstRegistrationDate", "Distance", "Price", "OriginPrice", "SellType", 
+    "Location", "DetailURL", "Photo"
+]
 
-def make_readside_session() -> requests.Session:
-    s = requests.Session()
-    s.trust_env = False
-    retries = Retry(
-        total=3, backoff_factor=0.4, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"]
-    )
-    s.mount("https://", HTTPAdapter(max_retries=retries))
-    s.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/140.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json, text/plain, */*",
-            "Origin": "https://fem.encar.com",
-            "Referer": "https://fem.encar.com/",
-        }
-    )
-    bearer = (os.getenv("ENCAR_BEARER") or "").strip()
-    if bearer:
-        s.headers["Authorization"] = f"Bearer {bearer}"
-    return s
-
-def get_json(s: requests.Session, params: dict):
-    r = s.get(BASE_URL, params=params, timeout=15)
-    r.raise_for_status()
-    if "application/json" not in r.headers.get("Content-Type", "").lower():
-        raise ValueError(f"Non-JSON: {r.url}")
-    return r.json()
-
-# -----------------------------------------------------------------------------
-# 검색 필터링세팅
-# -----------------------------------------------------------------------------
-def build_action_from_categories(categories, car_type="Y"):
-    names = [str(c).strip() for c in categories if c and str(c).strip()]
-    names = list(dict.fromkeys(names))  # dedup
-    if not names:
-        return f"(And.Hidden.N._.(C.CarType.{car_type}.))"
-    joined = "Category." + "._.Category.".join(names) + "."
-    return f"(And.Hidden.N._.(C.CarType.{car_type}._.(Or.{joined})))"
-
-def get_total_count(s, action, sort="ModifiedDate"):
-    j = get_json(s, {"count": "true", "q": action, "sr": f"|{sort}|0|1"})
-    return int(j.get("Count", 0) or 0)
-
-# -----------------------------------------------------------------------------
-# 데이터 정제함수
-# -----------------------------------------------------------------------------
-def make_detail_url(cid: int, pageid: str) -> str:
-    return (
-        f"https://fem.encar.com/cars/detail/{cid}"
-        f"?pageid={pageid}&listAdvType=pic&carid={cid}&view_type=normal"
-    )
+# =============================================================================
+# 유틸리티 함수들
+# =============================================================================
 
 def to_int_safe(x):
+    """안전한 정수 변환"""
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
     if isinstance(x, (int, float)):
@@ -131,7 +51,38 @@ def to_int_safe(x):
         return int("".join(m)) if m else None
     return None
 
+def parse_year(x) -> int | None:
+    """문자열에서 연식(YYYY) 추출"""
+    if x is None:
+        return None
+    if isinstance(x, (int, float)) and not pd.isna(x):
+        try:
+            return int(x)
+        except Exception:
+            return None
+    s = str(x)
+    m = re.search(r"(\d{4})", s)
+    return int(m.group(1)) if m else None
+
+def parse_yyyymmdd(x) -> int | None:
+    """문자열에서 YYYYMMDD 추출"""
+    if not x:
+        return None
+    s = re.sub(r"\D", "", str(x))
+    if len(s) >= 8:
+        s = s[:8]
+        try:
+            return int(s)
+        except Exception:
+            return None
+    return None
+
+def make_detail_url(cid: int, pageid: str) -> str:
+    """상세 URL 생성"""
+    return f"https://fem.encar.com/cars/detail/{cid}?pageid={pageid}&listAdvType=pic&carid={cid}&view_type=normal"
+
 def extract_photo(row: pd.Series):
+    """사진 URL 추출"""
     if isinstance(row.get("Photo"), str) and row.get("Photo"):
         return row["Photo"]
     photos = row.get("Photos")
@@ -145,78 +96,133 @@ def extract_photo(row: pd.Series):
             return first
     return None
 
-# 문자열 → 연식(YYYY)
-def _parse_year(x) -> int | None:
-    if x is None:
-        return None
-    if isinstance(x, (int, float)) and not pd.isna(x):
-        try:
-            return int(x)
-        except Exception:
-            return None
-    s = str(x)
-    m = re.search(r"(\d{4})", s)
-    return int(m.group(1)) if m else None
+# =============================================================================
+# HTTP 세션 관리
+# =============================================================================
 
-# 문자열 → YYYYMMDD (하이픈/점 제거)
-def _parse_yyyymmdd(x) -> int | None:
-    if not x:
-        return None
-    s = re.sub(r"\D", "", str(x))
-    if len(s) >= 8:
-        s = s[:8]
-        try:
-            return int(s)
-        except Exception:
-            return None
-    return None
+def make_session(referer: str) -> requests.Session:
+    """기본 세션 생성"""
+    s = requests.Session()
+    s.trust_env = False
+    retries = Retry(
+        total=5,
+        backoff_factor=1.2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retries))
+    s.headers.update({
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "origin": "https://www.encar.com",
+        "referer": referer,
+    })
+    return s
 
-# -----------------------------------------------------------------------------
-# DB
-# -----------------------------------------------------------------------------
-def make_mysql_engine():
-    url = os.getenv("DB_URL")
-    if not url:
-        host = os.getenv("DB_HOST", "127.0.0.1")
-        port = os.getenv("DB_PORT", "3306")
-        user = os.getenv("DB_USER")
-        pwd = os.getenv("DB_PASSWORD")
-        db = os.getenv("DB_NAME")
-        if not all([user, pwd, db]):
-            raise RuntimeError("DB_URL 또는 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME 설정 필요")
-        url = f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8mb4"
-    return create_engine(url, pool_pre_ping=True, future=True)
+def make_readside_session() -> requests.Session:
+    """Readside API 세션 생성"""
+    s = requests.Session()
+    s.trust_env = False
+    retries = Retry(
+        total=3, 
+        backoff_factor=0.4, 
+        status_forcelist=[429, 500, 502, 503, 504], 
+        allowed_methods=["GET"]
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retries))
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://fem.encar.com",
+        "Referer": "https://fem.encar.com/",
+    })
+    bearer = (os.getenv("ENCAR_BEARER") or "").strip()
+    if bearer:
+        s.headers["Authorization"] = f"Bearer {bearer}"
+    return s
 
-def upsert_df(engine, df: pd.DataFrame, table_name: str):
-    if df.empty:
-        return
-    meta = MetaData()
-    meta.reflect(bind=engine, only=[table_name])
-    table = Table(table_name, meta, autoload_with=engine)
+def get_json(s: requests.Session, params: dict):
+    """JSON 응답 가져오기"""
+    r = s.get(BASE_URL, params=params, timeout=15)
+    r.raise_for_status()
+    if "application/json" not in r.headers.get("Content-Type", "").lower():
+        raise ValueError(f"Non-JSON: {r.url}")
+    return r.json()
 
-    # 테이블에 존재하는 컬럼만 남기기 (예방 차원)
-    keep = [c for c in df.columns if c in [col.name for col in table.columns]]
-    df2 = df[keep].copy()
-    if df2.empty:
-        return
+# =============================================================================
+# 검색 및 필터링
+# =============================================================================
 
-    recs = df2.to_dict(orient="records")
-    stmt = mysql_insert(table).values(recs)
+def build_action_from_categories(categories, car_type="Y"):
+    """카테고리로 검색 액션 생성"""
+    names = [str(c).strip() for c in categories if c and str(c).strip()]
+    names = list(dict.fromkeys(names))  # 중복 제거
+    if not names:
+        return f"(And.Hidden.N._.(C.CarType.{car_type}.))"
+    joined = "Category." + "._.Category.".join(names) + "."
+    return f"(And.Hidden.N._.(C.CarType.{car_type}._.(Or.{joined})))"
 
-    # VehicleId/CarSeq 제외하고 UPSERT
-    exclude = {"vehicleid", "carseq"}
-    upd = {c.name: stmt.inserted[c.name] for c in table.columns if c.name in df2.columns and c.name.lower() not in exclude}
-    stmt = stmt.on_duplicate_key_update(**upd)
+def get_total_count(s, action, sort="ModifiedDate"):
+    """전체 개수 조회"""
+    j = get_json(s, {"count": "true", "q": action, "sr": f"|{sort}|0|1"})
+    return int(j.get("Count", 0) or 0)
 
-    with engine.begin() as conn:
-        conn.execute(stmt)
+# =============================================================================
+# 데이터 정제 및 변환
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# vehicleNo 수집 (상세 HTML에서 추출)
-# -----------------------------------------------------------------------------
-RE_VEH_NO = re.compile(r'"vehicleNo"\s*:\s*"([^"]+)"', re.S)
+def shape_rows(df_raw: pd.DataFrame, pageid: str, category_fallback: str, market_key: str) -> pd.DataFrame:
+    """원시 데이터를 표준 형식으로 변환"""
+    id_col = next((c for c in ["vehicleId", "VehicleId", "id", "Id", "carId", "carid"] if c in df_raw.columns), None)
+    if id_col is None:
+        raise KeyError("vehicleId-like column not found in SearchResults")
 
-def _fetch_vehicle_no(url, session):
+    df = pd.DataFrame()
+    
+    # 기본 정보
+    df["CarSeq"] = df_raw[id_col].apply(to_int_safe).astype("Int64")
+    df["Platform"] = pd.Series(["encar"] * len(df_raw), dtype="string")
+    df["Origin"] = pd.Series(["국산" if market_key == "korean" else "수입"] * len(df_raw), dtype="string")
+
+    # 차종
+    if "Category" in df_raw.columns and df_raw["Category"].notna().any():
+        df["CarType"] = df_raw["Category"].astype("string")
+    elif "CategoryName" in df_raw.columns and df_raw["CategoryName"].notna().any():
+        df["CarType"] = df_raw["CategoryName"].astype("string")
+    else:
+        df["CarType"] = pd.Series([category_fallback] * len(df_raw), dtype="string")
+
+    # 차량 정보
+    df["Manufacturer"] = df_raw.get("Manufacturer").astype("string") if "Manufacturer" in df_raw else pd.Series(dtype="string")
+    df["Model"] = df_raw.get("Model").astype("string") if "Model" in df_raw else pd.Series(dtype="string")
+    df["Generation"] = df_raw.get("Badge").astype("string") if "Badge" in df_raw else pd.Series(dtype="string")
+    df["Trim"] = df_raw.get("BadgeDetail").astype("string") if "BadgeDetail" in df_raw else pd.Series(dtype="string")
+    df["FuelType"] = df_raw.get("FuelType").astype("string") if "FuelType" in df_raw else pd.Series(dtype="string")
+    df["Transmission"] = df_raw.get("Transmission").astype("string") if "Transmission" in df_raw else pd.Series(dtype="string")
+    df["ModelYear"] = df_raw.get("FormYear").apply(to_int_safe).astype("Int64") if "FormYear" in df_raw else pd.Series(dtype="Int64")
+    df["Distance"] = df_raw.get("Mileage").apply(to_int_safe).astype("Int64") if "Mileage" in df_raw else pd.Series(dtype="Int64")
+    df["Price"] = df_raw.get("Price").apply(to_int_safe).astype("Int64") if "Price" in df_raw else pd.Series(dtype="Int64")
+    df["SellType"] = df_raw.get("SellType").astype("string") if "SellType" in df_raw else pd.Series(dtype="string")
+    df["Location"] = df_raw.get("OfficeCityState").astype("string") if "OfficeCityState" in df_raw else pd.Series(dtype="string")
+    df["DetailURL"] = df["CarSeq"].map(lambda x: make_detail_url(x, pageid) if pd.notna(x) else None).astype("string")
+    df["Photo"] = df_raw.apply(extract_photo, axis=1).astype("string")
+
+    # 보강 예정 필드 초기화
+    df["VehicleNo"] = pd.Series([None] * len(df), dtype="string")
+    df["OriginPrice"] = pd.Series([None] * len(df), dtype="Int64")
+    df["ColorName"] = pd.Series([None] * len(df), dtype="string")
+    df["FirstRegistrationDate"] = pd.Series([None] * len(df), dtype="Int64")
+
+    return df[WANTED_COLS]
+
+# =============================================================================
+# 상세 정보 수집
+# =============================================================================
+
+def fetch_vehicle_no(url: str, session: requests.Session) -> str | None:
+    """차량번호 수집"""
+    RE_VEH_NO = re.compile(r'"vehicleNo"\s*:\s*"([^"]+)"', re.S)
     try:
         resp = session.get(url, timeout=6)
         if resp.ok:
@@ -227,41 +233,8 @@ def _fetch_vehicle_no(url, session):
         pass
     return None
 
-def attach_vehicle_no(df: pd.DataFrame, max_workers=6, throttle_sec=0.0):
-    if df.empty or "DetailURL" not in df.columns:
-        return df
-    s = requests.Session()
-    s.trust_env = False
-    s.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/140.0.0.0 Safari/537.36"
-            ),
-            "Referer": "https://fem.encar.com/",
-            "Origin": "https://fem.encar.com",
-        }
-    )
-    results = [None] * len(df)
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(_fetch_vehicle_no, url, s): i for i, url in enumerate(df["DetailURL"].tolist())}
-        for fut in as_completed(futures):
-            i = futures[fut]
-            try:
-                results[i] = fut.result()
-            except Exception:
-                results[i] = None
-            if throttle_sec > 0:
-                time.sleep(throttle_sec)
-    out = df.copy()
-    out["VehicleNo"] = pd.Series(results, index=out.index, dtype="string")
-    return out
-
-# -----------------------------------------------------------------------------
-# OriginPrice, ColorName
-# -----------------------------------------------------------------------------
 def fetch_readside_detail(s: requests.Session, car_seq: int):
+    """Readside API에서 상세 정보 수집"""
     url = f"https://api.encar.com/v1/readside/vehicle/{car_seq}?include=CATEGORY,SPEC"
     try:
         r = s.get(url, timeout=8)
@@ -281,9 +254,59 @@ def fetch_readside_detail(s: requests.Session, car_seq: int):
     except Exception:
         return None, None
 
+def fetch_open_record_detail(s: requests.Session, car_seq: int, vehicle_no: str):
+    """Open Record API에서 최초등록일 수집"""
+    if not vehicle_no:
+        return None
+    url = f"https://api.encar.com/v1/readside/record/vehicle/{car_seq}/open"
+    try:
+        r = s.get(url, params={"vehicleNo": vehicle_no}, timeout=8)
+        if not r.ok:
+            return None
+        j = r.json()
+        first = parse_yyyymmdd(j.get("firstDate"))
+        return first
+    except Exception:
+        return None
+
+# =============================================================================
+# 데이터 보강 함수들
+# =============================================================================
+
+def attach_vehicle_no(df: pd.DataFrame, max_workers=6, throttle_sec=0.0):
+    """차량번호 추가"""
+    if df.empty or "DetailURL" not in df.columns:
+        return df
+    
+    s = requests.Session()
+    s.trust_env = False
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+        "Referer": "https://fem.encar.com/",
+        "Origin": "https://fem.encar.com",
+    })
+    
+    results = [None] * len(df)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(fetch_vehicle_no, url, s): i for i, url in enumerate(df["DetailURL"].tolist())}
+        for fut in as_completed(futures):
+            i = futures[fut]
+            try:
+                results[i] = fut.result()
+            except Exception:
+                results[i] = None
+            if throttle_sec > 0:
+                time.sleep(throttle_sec)
+    
+    out = df.copy()
+    out["VehicleNo"] = pd.Series(results, index=out.index, dtype="string")
+    return out
+
 def enrich_with_readside(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -> pd.DataFrame:
+    """Readside API로 출시가/색상 보강"""
     if df.empty or "CarSeq" not in df.columns:
         return df
+    
     s = make_readside_session()
     ids = df["CarSeq"].dropna().astype(int).tolist()
 
@@ -314,24 +337,8 @@ def enrich_with_readside(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -> p
     out["ColorName"] = pd.Series(res_cn, index=out.index, dtype="string")
     return out
 
-# -----------------------------------------------------------------------------
-# open record → ModelYear, FirstRegistrationDate
-# -----------------------------------------------------------------------------
-def fetch_open_record_detail(s: requests.Session, car_seq: int, vehicle_no: str):
-    if not vehicle_no:
-        return None
-    url = f"https://api.encar.com/v1/readside/record/vehicle/{car_seq}/open"
-    try:
-        r = s.get(url, params={"vehicleNo": vehicle_no}, timeout=8)
-        if not r.ok:
-            return None
-        j = r.json()
-        first = _parse_yyyymmdd(j.get("firstDate"))
-        return first
-    except Exception:
-        return None
-
 def enrich_with_open_record(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -> pd.DataFrame:
+    """Open Record API로 최초등록일 보강"""
     if df.empty or "CarSeq" not in df.columns or "VehicleNo" not in df.columns:
         return df
 
@@ -359,61 +366,74 @@ def enrich_with_open_record(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -
     out["FirstRegistrationDate"] = pd.Series(res_f, index=out.index, dtype="Int64")
     return out
 
+# =============================================================================
+# DB 관리
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# 정규화 (스키마에 맞는 컬럼만 생성)
-# -----------------------------------------------------------------------------
-WANTED_COLS = [
-    "CarSeq","VehicleNo","Platform","Origin","CarType","Manufacturer","Model","Generation","Trim","FuelType","Transmission",
-    "ColorName","ModelYear","FirstRegistrationDate","Distance","Price","OriginPrice","SellType","Location","DetailURL","Photo",
-]
+def save_vehicles_to_db(vehicles_data: list):
+    """차량 데이터를 DB에 저장"""
+    if not vehicles_data:
+        return
+    
+    with session_scope() as session:
+        saved_count = 0
+        skipped_count = 0
+        
+        for data in vehicles_data:
+            try:
+                # Vehicle 객체 생성
+                vehicle = Vehicle(
+                    carseq=data.get('CarSeq'),
+                    vehicleno=data.get('VehicleNo'),
+                    platform=data.get('Platform', 'encar'),
+                    origin=data.get('Origin'),
+                    cartype=data.get('CarType'),
+                    manufacturer=data.get('Manufacturer'),
+                    model=data.get('Model'),
+                    generation=data.get('Generation'),
+                    trim=data.get('Trim'),
+                    fueltype=data.get('FuelType'),
+                    transmission=data.get('Transmission'),
+                    colorname=data.get('ColorName'),
+                    modelyear=data.get('ModelYear'),
+                    firstregistrationdate=data.get('FirstRegistrationDate'),
+                    distance=data.get('Distance'),
+                    price=data.get('Price'),
+                    originprice=data.get('OriginPrice'),
+                    selltype=data.get('SellType'),
+                    location=data.get('Location'),
+                    detailurl=data.get('DetailURL'),
+                    photo=data.get('Photo')
+                )
+                
+                # 중복 체크 후 저장
+                existing = session.query(Vehicle).filter(
+                    Vehicle.carseq == data.get('CarSeq')
+                ).first()
+                
+                if not existing:
+                    session.add(vehicle)
+                    saved_count += 1
+                else:
+                    skipped_count += 1
+                    
+            except Exception as e:
+                print(f"[저장 실패] CarSeq: {data.get('CarSeq')}: {e}")
+                skipped_count += 1
+        
+        print(f"[DB 저장 완료] {saved_count}건 저장, {skipped_count}건 건너뜀")
 
-def shape_rows(df_raw: pd.DataFrame, pageid: str, category_fallback: str, market_key: str) -> pd.DataFrame:
-    id_col = next((c for c in ["vehicleId", "VehicleId", "id", "Id", "carId", "carid"] if c in df_raw.columns), None)
-    if id_col is None:
-        raise KeyError("vehicleId-like column not found in SearchResults")
+def get_existing_car_seqs() -> set:
+    """DB에서 이미 크롤링된 carSeq들을 가져옵니다."""
+    with session_scope() as session:
+        result = session.query(Vehicle.carseq).filter(Vehicle.platform == "encar").all()
+        return {int(row[0]) for row in result if row[0] is not None}
 
-    df = pd.DataFrame()
-    # 내부 식별자
-    df["CarSeq"] = df_raw[id_col].apply(to_int_safe).astype("Int64")
-    df["Platform"] = pd.Series(["encar"] * len(df_raw), dtype="string")
-    df["Origin"] = pd.Series(["국산" if market_key == "korean" else "수입"] * len(df_raw), dtype="string")
+# =============================================================================
+# 메인 크롤링 함수
+# =============================================================================
 
-    # 차종 (API 그대로, 없으면 카테고리 보완)
-    if "Category" in df_raw.columns and df_raw["Category"].notna().any():
-        df["CarType"] = df_raw["Category"].astype("string")
-    elif "CategoryName" in df_raw.columns and df_raw["CategoryName"].notna().any():
-        df["CarType"] = df_raw["CategoryName"].astype("string")
-    else:
-        df["CarType"] = pd.Series([category_fallback] * len(df_raw), dtype="string")
-
-    # 제조사/모델/세대/트림 (분리 저장)
-    df["Manufacturer"] = df_raw.get("Manufacturer").astype("string") if "Manufacturer" in df_raw else pd.Series(dtype="string")
-    df["Model"] = df_raw.get("Model").astype("string") if "Model" in df_raw else pd.Series(dtype="string")
-    df["Generation"] = df_raw.get("Badge").astype("string") if "Badge" in df_raw else pd.Series(dtype="string")
-    df["Trim"] = df_raw.get("BadgeDetail").astype("string") if "BadgeDetail" in df_raw else pd.Series(dtype="string")
-    df["FuelType"] = df_raw.get("FuelType").astype("string") if "FuelType" in df_raw else pd.Series(dtype="string")
-    df["Transmission"] = df_raw.get("Transmission").astype("string") if "Transmission" in df_raw else pd.Series(dtype="string")
-    df["ModelYear"] = df_raw.get("FormYear").apply(to_int_safe).astype("Int64") if "FormYear" in df_raw else pd.Series(dtype="Int64")
-    df["Distance"] = (df_raw.get("Mileage").apply(to_int_safe).astype("Int64") if "Mileage" in df_raw else pd.Series(dtype="Int64"))
-    df["Price"] = df_raw.get("Price").apply(to_int_safe).astype("Int64") if "Price" in df_raw else pd.Series(dtype="Int64")
-    df["SellType"] = df_raw.get("SellType").astype("string") if "SellType" in df_raw else pd.Series(dtype="string")
-    df["Location"] = (df_raw.get("OfficeCityState").astype("string") if "OfficeCityState" in df_raw else pd.Series(dtype="string"))
-    df["DetailURL"] = df["CarSeq"].map(lambda x: make_detail_url(x, pageid) if pd.notna(x) else None).astype("string")
-    df["Photo"] = df_raw.apply(extract_photo, axis=1).astype("string")
-
-    # 보강 예정 필드 초기화
-    df["VehicleNo"] = pd.Series([None] * len(df), dtype="string")
-    df["OriginPrice"] = pd.Series([None] * len(df), dtype="Int64")
-    df["ColorName"] = pd.Series([None] * len(df), dtype="string")
-    df["FirstRegistrationDate"] = pd.Series([None] * len(df), dtype="Int64")
-
-    return df[WANTED_COLS]
-
-# -----------------------------------------------------------------------------
-# 크롤링 & 적재
-# -----------------------------------------------------------------------------
-def crawl_market_to_mysql(
+def crawl_market_to_db(
     market_key: str,
     categories,
     sort="ModifiedDate",
@@ -425,20 +445,18 @@ def crawl_market_to_mysql(
     fetch_detail=True,
     detail_workers=8,
     detail_throttle=0.0,
-    # ↓ 이어받기 옵션
-    resume_from_db=True,               # DB에 있는 CarSeq는 스킵
-    stop_after_consecutive_seen=2,     # '전부 기존' 페이지만 연속 n번 나오면 조기 종료
+    resume_from_db=True,
+    stop_after_consecutive_seen=2,
 ):
-    conf = MARKET[market_key]
+    """마켓별 크롤링 및 DB 저장"""
+    conf = MARKET_CONFIG[market_key]
     s = make_session(conf["referer"])
-    engine = make_mysql_engine()
 
-    # 0) 이미 저장된 CarSeq 집합 로드 (인덱스 필수: CREATE INDEX idx_vehicles_carseq ON vehicles(CarSeq);)
+    # 기존 CarSeq 로드
     existing_ids = set()
     if resume_from_db:
         try:
-            df_exist = pd.read_sql("SELECT CarSeq FROM vehicles WHERE CarSeq IS NOT NULL", engine)
-            existing_ids = set(df_exist["CarSeq"].dropna().astype(int).tolist())
+            existing_ids = get_existing_car_seqs()
             print(f"[resume] existing CarSeq loaded: {len(existing_ids):,}")
         except Exception as e:
             print(f"[resume] load existing ids failed: {e}")
@@ -462,7 +480,7 @@ def crawl_market_to_mysql(
             raw = pd.json_normalize(rows, max_level=1)
             shaped = shape_rows(raw, pageid=conf["pageid"], category_fallback=cat, market_key=market_key)
 
-            # 이어받기: 배치 내부 중복 제거 + 기존 CarSeq 스킵
+            # 이어받기: 기존 CarSeq 스킵
             if resume_from_db and not shaped.empty:
                 shaped = shaped[~shaped["CarSeq"].isna()].copy()
                 shaped["CarSeq"] = shaped["CarSeq"].astype(int)
@@ -485,21 +503,21 @@ def crawl_market_to_mysql(
                 time.sleep(sleep_sec)
                 continue
 
-            # 1) 차량번호 수집
+            # 데이터 보강
             if fetch_vehicle_no:
                 shaped = attach_vehicle_no(shaped, max_workers=vehno_workers, throttle_sec=vehno_throttle)
 
-            # 2) 최초등록일만 open-record에서
             shaped = enrich_with_open_record(shaped, max_workers=detail_workers, throttle_sec=detail_throttle)
 
-            # 3) 출시가/색상
             if fetch_detail:
                 shaped = enrich_with_readside(shaped, max_workers=detail_workers, throttle_sec=detail_throttle)
 
-            upsert_df(engine, shaped, "vehicles")
+            # DB 저장
+            vehicles_data = shaped.to_dict('records')
+            save_vehicles_to_db(vehicles_data)
             saved += len(shaped)
 
-            # 방금 본 CarSeq를 즉시 합쳐 다음 페이지에서 스킵률 향상
+            # 기존 ID 업데이트
             if resume_from_db:
                 existing_ids.update(shaped["CarSeq"].dropna().astype(int).tolist())
 
@@ -508,11 +526,16 @@ def crawl_market_to_mysql(
         print(f"[{market_key}] '{cat}' 저장 완료: {saved:,}건")
         total_saved += saved
 
-    print(f"[{market_key}] 총 {total_saved:,}건 UPSERT 완료 → vehicles")
+    print(f"[{market_key}] 총 {total_saved:,}건 저장 완료 → vehicles")
 
+# =============================================================================
+# 실행 부분
+# =============================================================================
 
 def main():
-    crawl_market_to_mysql(
+    """메인 실행 함수"""
+    # 국산차 크롤링
+    crawl_market_to_db(
         "korean",
         KOR_CATEGORIES,
         sort="ModifiedDate",
@@ -524,10 +547,12 @@ def main():
         fetch_detail=True,
         detail_workers=8,
         detail_throttle=0.0,
-        resume_from_db=True,             
-        stop_after_consecutive_seen=1,   
+        resume_from_db=True,
+        stop_after_consecutive_seen=1,
     )
-    crawl_market_to_mysql(
+    
+    # 수입차 크롤링
+    crawl_market_to_db(
         "foreign",
         KOR_CATEGORIES,
         sort="ModifiedDate",
@@ -539,8 +564,8 @@ def main():
         fetch_detail=True,
         detail_workers=8,
         detail_throttle=0.0,
-        resume_from_db=True,             
-        stop_after_consecutive_seen=1,   
+        resume_from_db=True,
+        stop_after_consecutive_seen=1,
     )
 
 if __name__ == "__main__":
