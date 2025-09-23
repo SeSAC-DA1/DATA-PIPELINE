@@ -51,3 +51,16 @@ CREATE TABLE IF NOT EXISTS vehicles_insurance (
     isDisclosed TINYINT(1),       -- 보험이력 공개여부(0:비공개/1:공개)
     FOREIGN KEY (vehicleId) REFERENCES vehicles(vehicleId)
 );
+
+-- 4. 성별/연령대 별 현대자동차 구매
+CREATE TABLE IF NOT EXISTS hyundai_segment_purchases (
+    Id INT NOT NULL,                 -- Id
+    CarType VARCHAR(16),             -- 차종
+    Manufacturer VARCHAR(20),        -- 제조사
+    Model VARCHAR(50),               -- 모델명
+    Age INT,                         -- 구매자 연령대
+    Gender VARCHAR(16),              -- 구매자 성별
+    Satisfaction DECIMAL(2,1),       -- 차량 만족도
+    Review VARCHAR(2048),            -- 차량 리뷰
+    PRIMARY KEY (Id)
+);
