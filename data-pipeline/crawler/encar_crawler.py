@@ -21,7 +21,7 @@ ENV_PATH = REPO_ROOT.parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH); load_dotenv()
 
 BASE_URL = "https://api.encar.com/search/car/list/premium"
-KOR_CATEGORIES = ["경차", "소형차", "준중형차", "중형차", "대형차", "스포츠카", "SUV", "RV", "승합차", "화물차"]
+KOR_CATEGORIES = ["경차", "소형", "준중형", "중형", "대형", "스포츠카", "SUV", "RV", "승합", "트럭"]
 MARKET = {
     "korean": {
         "car_type": "Y",
