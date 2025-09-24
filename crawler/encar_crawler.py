@@ -4,7 +4,11 @@ import requests
 from requests.adapters import HTTPAdapter, Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from connection import session_scope
-from model import Vehicle
+from model import Vehicle, OptionMaster, VehicleOption
+from option_service import (
+    initialize_global_options, convert_platform_options_to_global
+)
+from vehicle_service import save_vehicle_with_options
 
 # =============================================================================
 # 상수 및 설정
@@ -371,57 +375,68 @@ def enrich_with_open_record(df: pd.DataFrame, max_workers=8, throttle_sec=0.0) -
 # =============================================================================
 
 def save_vehicles_to_db(vehicles_data: list):
-    """차량 데이터를 DB에 저장"""
+    """차량 데이터와 공통 옵션을 DB에 저장"""
     if not vehicles_data:
         return
     
     with session_scope() as session:
         saved_count = 0
         skipped_count = 0
+        options_saved_count = 0
         
         for data in vehicles_data:
             try:
-                # Vehicle 객체 생성
-                vehicle = Vehicle(
-                    carseq=data.get('CarSeq'),
-                    vehicleno=data.get('VehicleNo'),
-                    platform=data.get('Platform', 'encar'),
-                    origin=data.get('Origin'),
-                    cartype=data.get('CarType'),
-                    manufacturer=data.get('Manufacturer'),
-                    model=data.get('Model'),
-                    generation=data.get('Generation'),
-                    trim=data.get('Trim'),
-                    fueltype=data.get('FuelType'),
-                    transmission=data.get('Transmission'),
-                    colorname=data.get('ColorName'),
-                    modelyear=data.get('ModelYear'),
-                    firstregistrationdate=data.get('FirstRegistrationDate'),
-                    distance=data.get('Distance'),
-                    price=data.get('Price'),
-                    originprice=data.get('OriginPrice'),
-                    selltype=data.get('SellType'),
-                    location=data.get('Location'),
-                    detailurl=data.get('DetailURL'),
-                    photo=data.get('Photo')
-                )
+                # 차량 데이터 준비
+                vehicle_data = {
+                    'carseq': data.get('CarSeq'),
+                    'vehicleno': data.get('VehicleNo'),
+                    'platform': data.get('Platform', 'encar'),
+                    'origin': data.get('Origin'),
+                    'cartype': data.get('CarType'),
+                    'manufacturer': data.get('Manufacturer'),
+                    'model': data.get('Model'),
+                    'generation': data.get('Generation'),
+                    'trim': data.get('Trim'),
+                    'fueltype': data.get('FuelType'),
+                    'transmission': data.get('Transmission'),
+                    'colorname': data.get('ColorName'),
+                    'modelyear': data.get('ModelYear'),
+                    'firstregistrationdate': data.get('FirstRegistrationDate'),
+                    'distance': data.get('Distance'),
+                    'price': data.get('Price'),
+                    'originprice': data.get('OriginPrice'),
+                    'selltype': data.get('SellType'),
+                    'location': data.get('Location'),
+                    'detailurl': data.get('DetailURL'),
+                    'photo': data.get('Photo')
+                }
                 
-                # 중복 체크 후 저장
+                # 중복 체크
                 existing = session.query(Vehicle).filter(
-                    Vehicle.carseq == data.get('CarSeq')
+                    Vehicle.carseq == vehicle_data['carseq']
                 ).first()
                 
-                if not existing:
-                    session.add(vehicle)
-                    saved_count += 1
-                else:
+                if existing:
                     skipped_count += 1
+                    continue
+                
+                # 1. 플랫폼별 옵션을 공통 옵션으로 변환
+                platform_options = data.get('options', [])
+                platform_codes = [option.get('code') for option in platform_options if option.get('code')]
+                global_codes = convert_platform_options_to_global(platform_codes, 'encar')
+                
+                # 2. 공통 옵션과 함께 차량 저장
+                vehicle_id, options_saved = save_vehicle_with_options(vehicle_data, global_codes)
+                
+                if vehicle_id:
+                    saved_count += 1
+                    options_saved_count += options_saved
                     
             except Exception as e:
                 print(f"[저장 실패] CarSeq: {data.get('CarSeq')}: {e}")
                 skipped_count += 1
         
-        print(f"[DB 저장 완료] {saved_count}건 저장, {skipped_count}건 건너뜀")
+        print(f"[DB 저장 완료] {saved_count}건 저장, {skipped_count}건 건너뜀, 공통 옵션: {options_saved_count}개 저장")
 
 def get_existing_car_seqs() -> set:
     """DB에서 이미 크롤링된 carSeq들을 가져옵니다."""

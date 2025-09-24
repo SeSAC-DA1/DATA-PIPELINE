@@ -1,10 +1,20 @@
-import re, json, time, requests
+import re, json, time, requests, sys, os
 from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from connection import session_scope, Engine
-from model import Vehicle, OptionMaster, VehicleOption, Base, create_tables_if_not_exist, check_database_status
+
+# 프로젝트 루트 경로 추가
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from db.connection import session_scope, Engine
+from db.model import (
+    Vehicle, OptionMaster, VehicleOption, Base, 
+    create_tables_if_not_exist, check_database_status
+)
+from crawler.option_mapping import (
+    initialize_global_options, convert_platform_options_to_global
+)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -435,42 +445,7 @@ def get_car_options_from_html(car_seq: str, s: requests.Session) -> List[Dict[st
         print(f"[옵션 파싱 오류] carSeq: {car_seq}: {e}")
         return []
 
-# =============================================================================
-# 옵션 마스터 관리
-# =============================================================================
 
-def initialize_kb_option_masters():
-    """KB차차차 옵션 마스터 초기화"""
-    url = 'https://www.kbchachacha.com/public/car/option/code/list.json'
-    
-    try:
-        response = requests.post(url, timeout=15)
-        response.raise_for_status()
-        
-        data = response.json()
-        option_list = data['optionList']
-        
-        with session_scope() as session:
-            for option in option_list:
-                existing = session.query(OptionMaster).filter(
-                    OptionMaster.platform == 'kb_chachacha',
-                    OptionMaster.original_code == option['optionCode']
-                ).first()
-                
-                if not existing:
-                    option_master = OptionMaster(
-                        platform='kb_chachacha',
-                        original_code=option['optionCode'],
-                        option_name=option['optionName'],
-                        option_group=option['optionGbnName']
-                    )
-                    session.add(option_master)
-            
-            session.commit()
-            print(f"[KB차차차 옵션 마스터 초기화 완료] {len(option_list)}개 옵션 저장")
-            
-    except Exception as e:
-        print(f"[KB차차차 옵션 마스터 초기화 실패] {e}")
 
 # =============================================================================
 # 데이터 변환 및 저장 함수들
@@ -512,53 +487,104 @@ def create_vehicle_record(api_data: Dict[str, Any], html_data: Dict[str, Any], m
     }
     return record
 
-def save_vehicle_options_to_db(vehicle_id: int, options: List[Dict[str, Any]], session, platform: str = 'kb_chachacha') -> int:
-    """차량 옵션을 DB에 저장"""
+def save_vehicle_options_batch(vehicles_options: List[Dict], platform: str = 'kb_chachacha') -> int:
+    """차량 옵션들을 배치로 처리하여 DB에 저장 (최적화된 벌크 인서트)"""
+    if not vehicles_options:
+        return 0
+    
+    with session_scope() as session:
+        try:
+            # 1. 모든 옵션 마스터를 한 번에 조회 (N+1 쿼리 문제 해결)
+            option_masters = {opt.option_code: opt.option_id for opt in session.query(OptionMaster).all()}
+            
+            # 2. 기존 VehicleOption들을 한 번에 조회
+            existing_pairs = set()
+            for vo in session.query(VehicleOption.vehicle_id, VehicleOption.option_id).all():
+                existing_pairs.add((vo.vehicle_id, vo.option_id))
+            
+            # 3. 벌크 인서트용 데이터 준비
+            bulk_data = []
+            
+            for vehicle_data in vehicles_options:
+                vehicle_id = vehicle_data['vehicle_id']
+                options = vehicle_data['options']
+                
+                if not options:
+                    continue
+                
+                # 플랫폼별 옵션 코드 추출 및 공통 옵션 코드로 변환
+                platform_codes = [option['code'] for option in options]
+                global_codes = convert_platform_options_to_global(platform_codes, platform)
+                
+                # 중복 제거된 옵션만 추가
+                for option_code in global_codes:
+                    option_id = option_masters.get(option_code)
+                    if option_id and (vehicle_id, option_id) not in existing_pairs:
+                        bulk_data.append({
+                            'vehicle_id': vehicle_id,
+                            'option_id': option_id
+                        })
+                        existing_pairs.add((vehicle_id, option_id))  # 중복 방지
+            
+            # 4. 벌크 인서트 실행
+            if bulk_data:
+                session.bulk_insert_mappings(VehicleOption, bulk_data)
+                return len(bulk_data)
+            
+            return 0
+            
+        except Exception as e:
+            print(f"[배치 옵션 저장 오류]: {e}")
+            import traceback
+            print(f"[DEBUG] 상세 오류: {traceback.format_exc()}")
+            return 0
+
+def save_vehicle_options_single(vehicle_id: int, options: List[Dict[str, Any]], session, platform: str = 'kb_chachacha') -> int:
+    """개별 차량 옵션을 DB에 저장 (기존 세션 사용, 최적화됨)"""
     if not options:
         return 0
     
-    saved_count = 0
-    
     try:
-        codes = [option['code'] for option in options]
-        option_masters = session.query(OptionMaster).filter(
-            OptionMaster.platform == platform,
-            OptionMaster.original_code.in_(codes)
-        ).all()
+        # 플랫폼별 옵션 코드 추출 및 공통 옵션 코드로 변환
+        platform_codes = [option['code'] for option in options]
+        global_codes = convert_platform_options_to_global(platform_codes, platform)
         
-        code_to_option_id = {om.original_code: om.option_id for om in option_masters}
+        if not global_codes:
+            return 0
         
-        for option in options:
-            option_code = option['code']
-            option_id = code_to_option_id.get(option_code)
-            
-            if option_id:
-                vehicle_option = VehicleOption(
-                    vehicle_id=vehicle_id,
-                    option_id=option_id
-                )
+        # 옵션 마스터를 한 번에 조회
+        option_masters = {opt.option_code: opt.option_id for opt in 
+                         session.query(OptionMaster).filter(OptionMaster.option_code.in_(global_codes)).all()}
+        
+        # 기존 VehicleOption들을 한 번에 조회
+        existing_option_ids = {vo.option_id for vo in 
+                              session.query(VehicleOption.option_id).filter(VehicleOption.vehicle_id == vehicle_id).all()}
+        
+        # 저장할 옵션들 준비
+        saved_count = 0
+        for option_code in global_codes:
+            option_id = option_masters.get(option_code)
+            if option_id and option_id not in existing_option_ids:
+                vehicle_option = VehicleOption(vehicle_id=vehicle_id, option_id=option_id)
                 session.add(vehicle_option)
+                existing_option_ids.add(option_id)  # 중복 방지
                 saved_count += 1
         
         return saved_count
         
     except Exception as e:
-        print(f"[옵션 저장 오류] vehicle_id: {vehicle_id}: {e}")
+        print(f"[개별 옵션 저장 오류] vehicle_id: {vehicle_id}: {e}")
         return 0
 
 def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
-    """차량 정보와 옵션 정보를 DB에 저장합니다."""
+    """차량 정보와 공통 옵션 정보를 DB에 저장합니다."""
     if not records:
         print("저장할 레코드가 없습니다.")
         return
 
     with session_scope() as session:
-        existing_vehiclenos = set()
-        existing_records = session.query(Vehicle.vehicleno).all()
-        for row in existing_records:
-            if row[0]:
-                existing_vehiclenos.add(row[0])
-        
+        # 기존 차량번호를 한 번에 조회 (최적화)
+        existing_vehiclenos = {row[0] for row in session.query(Vehicle.vehicleno).all() if row[0]}
         print(f"[기존 DB] 저장된 차량번호: {len(existing_vehiclenos)}개")
         
         saved_count = 0
@@ -605,14 +631,14 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
                 
                 options = record.get('options', [])
                 if options and vehicle.vehicleid:
-                    options_saved = save_vehicle_options_to_db(vehicle.vehicleid, options, session)
+                    options_saved = save_vehicle_options_single(vehicle.vehicleid, options, session)
                     options_saved_count += options_saved
                     
             except Exception as e:
                 print(f"[저장 실패] carseq: {vehicle_data['carseq']}: {e}")
                 skipped_count += 1
         
-        print(f"[DB 저장 완료] 차량: {saved_count}건 저장, {skipped_count}건 건너뜀, 옵션: {options_saved_count}개 저장")
+        print(f"[DB 저장 완료] 차량: {saved_count}건 저장, {skipped_count}건 건너뜀, 공통 옵션: {options_saved_count}개 저장")
 
 # =============================================================================
 # 통합 크롤링 함수들
@@ -664,14 +690,15 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
 # 기존 차량 옵션 크롤링 함수들
 # =============================================================================
 
-def crawl_options_for_existing_vehicles(batch_size: int = 100, delay: float = 0.5):
+def crawl_options_for_existing_vehicles(batch_size: int = 50, delay: float = 0.5):
     """기존 차량들의 옵션 정보만 크롤링"""
     
-    with session_scope() as session:
-        vehicles_without_options = session.query(Vehicle).filter(
+    with session_scope() as db_session:
+        # 서브쿼리를 사용한 최적화된 조회
+        vehicles_without_options = db_session.query(Vehicle).filter(
             Vehicle.platform == 'kb_chachacha',
             ~Vehicle.vehicleid.in_(
-                session.query(VehicleOption.vehicle_id).distinct()
+                db_session.query(VehicleOption.vehicle_id).distinct()
             )
         ).all()
         
@@ -680,39 +707,46 @@ def crawl_options_for_existing_vehicles(batch_size: int = 100, delay: float = 0.
         if not vehicles_without_options:
             print("[옵션 크롤링 완료] 모든 차량의 옵션 정보가 이미 있습니다.")
             return
-        
-        total_processed = 0
-        session = build_session()
-        
-        for i in range(0, len(vehicles_without_options), batch_size):
-            batch = vehicles_without_options[i:i + batch_size]
-            processed = crawl_options_batch(batch, session, delay)
-            total_processed += processed
-            
-            print(f"[옵션 크롤링 진행] {i + len(batch)}/{len(vehicles_without_options)} 완료 (이번 배치: {processed}대)")
-            time.sleep(1)
-        
-        print(f"[옵션 크롤링 완료] 총 {total_processed}대 처리")
-
-def crawl_options_batch(vehicles: List[Vehicle], session: requests.Session, delay: float = 0.5) -> int:
-    """차량 배치의 옵션 정보 크롤링"""
-    processed_count = 0
     
+    total_processed = 0
+    requests_session = build_session()  # requests 세션
+    
+    for i in range(0, len(vehicles_without_options), batch_size):
+        batch = vehicles_without_options[i:i + batch_size]
+        processed = crawl_options_batch(batch, requests_session, delay)
+        total_processed += processed
+        
+        print(f"[옵션 크롤링 진행] {i + len(batch)}/{len(vehicles_without_options)} 완료 (이번 배치: {processed}대)")
+        time.sleep(1)
+    
+    print(f"[옵션 크롤링 완료] 총 {total_processed}대 처리")
+
+def crawl_options_batch(vehicles: List[Vehicle], requests_session: requests.Session, delay: float = 0.5) -> int:
+    """차량 배치의 옵션 정보 크롤링 (배치 처리 방식)"""
+    processed_count = 0
+    vehicles_options = []  # 배치 데이터 수집
+    
+    # 1단계: 모든 차량의 옵션 크롤링
     for vehicle in vehicles:
         try:
-            options = get_car_options_from_html(str(vehicle.carseq), session)
+            options = get_car_options_from_html(str(vehicle.carseq), requests_session)
             
-            with session_scope() as db_session:
-                saved_count = save_vehicle_options_to_db(vehicle.vehicleid, options, db_session)
-                if saved_count > 0:
-                    processed_count += 1
-                
-            print(f"[옵션 저장] {vehicle.manufacturer} {vehicle.model} - {len(options)}개 옵션")
+            if options:  # 옵션이 있는 경우만 추가
+                vehicles_options.append({
+                    'vehicle_id': vehicle.vehicleid,
+                    'options': options
+                })
+                processed_count += 1
             
         except Exception as e:
             print(f"[옵션 크롤링 실패] carseq: {vehicle.carseq}: {e}")
         
         time.sleep(delay)
+    
+    # 2단계: 배치로 DB 저장
+    if vehicles_options:
+        total_saved = save_vehicle_options_batch(vehicles_options)
+        print(f"[배치 저장 완료] {len(vehicles_options)}대 차량, {total_saved}개 옵션 저장")
     
     return processed_count
 
@@ -816,7 +850,7 @@ def crawl_options_only():
     print("[옵션 크롤링 시작]")
     
     print("[옵션 사전 초기화]")
-    initialize_kb_option_masters()
+    initialize_global_options()
     
     print("[기존 차량 옵션 크롤링]")
     crawl_options_for_existing_vehicles(batch_size=100, delay=0.5)
@@ -861,4 +895,12 @@ def crawl_kb_chachacha_with_options():
         print("[크롤링 완료] 새로운 차량이 없습니다.")
 
 if __name__ == "__main__":
-    crawl_kb_chachacha_with_options()
+    print("=" * 60)
+    print("🚗 KB 차차차 크롤러 시작")
+    print("=" * 60)
+    try:
+        crawl_kb_chachacha_with_options()
+    except Exception as e:
+        print(f"❌ 크롤러 실행 중 오류 발생: {e}")
+        import traceback
+        traceback.print_exc()

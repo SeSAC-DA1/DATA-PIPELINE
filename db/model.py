@@ -1,6 +1,6 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint, Text
 from sqlalchemy.ext.declarative import declarative_base
-from connection import session_scope, Engine
+from .connection import session_scope, Engine
 
 Base = declarative_base()
 
@@ -34,17 +34,17 @@ class OptionMaster(Base):
     __tablename__ = 'option_masters'
     
     option_id = Column(Integer, primary_key=True, autoincrement=True)
-    platform = Column(String(20), nullable=False)  # 'kb_chachacha', 'encar'
-    original_code = Column(String(50), nullable=False)  # 사이트별 원본 코드
-    option_name = Column(String(100), nullable=False)  # 옵션명
-    option_group = Column(String(50))  # 옵션 그룹
+    option_code = Column(String(50), unique=True, nullable=False)  # 'SUNROOF', 'LDWS' 등
+    option_name = Column(String(100), nullable=False)  # '선루프', '차선이탈경고' 등
+    option_group = Column(String(50), nullable=False)  # '외관/내장', '안전' 등
+    description = Column(Text)  # 옵션 설명
     
     # 인덱스
     __table_args__ = (
-        Index('idx_platform_code', 'platform', 'original_code'),
-        Index('idx_platform_group', 'platform', 'option_group'),
+        Index('idx_option_code', 'option_code'),
+        Index('idx_option_group', 'option_group'),
+        Index('idx_option_name', 'option_name'),
     )
-
 
 class VehicleOption(Base):
     __tablename__ = 'vehicle_options'
@@ -97,3 +97,4 @@ def check_database_status():
     except Exception as e:
         print(f"[DB 상태 확인 실패] {e}")
         return None
+
