@@ -21,7 +21,7 @@ ENV_PATH = REPO_ROOT.parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH); load_dotenv()
 
 BASE_URL = "https://api.encar.com/search/car/list/premium"
-KOR_CATEGORIES = ["경차", "소형차", "준중형차", "중형차", "대형차", "스포츠카", "SUV", "RV", "승합차", "화물차"]
+KOR_CATEGORIES = ["경차", "소형", "준중형", "중형", "대형", "스포츠카", "SUV", "RV", "승합", "트럭"]
 MARKET = {
     "korean": {
         "car_type": "Y",
@@ -95,7 +95,7 @@ def get_json(s: requests.Session, params: dict):
     return r.json()
 
 # -----------------------------------------------------------------------------
-# 검색 DSL
+# 검색 필터링세팅
 # -----------------------------------------------------------------------------
 def build_action_from_categories(categories, car_type="Y"):
     names = [str(c).strip() for c in categories if c and str(c).strip()]
@@ -110,7 +110,7 @@ def get_total_count(s, action, sort="ModifiedDate"):
     return int(j.get("Count", 0) or 0)
 
 # -----------------------------------------------------------------------------
-# 유틸
+# 데이터 정제함수
 # -----------------------------------------------------------------------------
 def make_detail_url(cid: int, pageid: str) -> str:
     return (
@@ -425,10 +425,23 @@ def crawl_market_to_mysql(
     fetch_detail=True,
     detail_workers=8,
     detail_throttle=0.0,
+    # ↓ 이어받기 옵션
+    resume_from_db=True,               # DB에 있는 CarSeq는 스킵
+    stop_after_consecutive_seen=2,     # '전부 기존' 페이지만 연속 n번 나오면 조기 종료
 ):
     conf = MARKET[market_key]
     s = make_session(conf["referer"])
     engine = make_mysql_engine()
+
+    # 0) 이미 저장된 CarSeq 집합 로드 (인덱스 필수: CREATE INDEX idx_vehicles_carseq ON vehicles(CarSeq);)
+    existing_ids = set()
+    if resume_from_db:
+        try:
+            df_exist = pd.read_sql("SELECT CarSeq FROM vehicles WHERE CarSeq IS NOT NULL", engine)
+            existing_ids = set(df_exist["CarSeq"].dropna().astype(int).tolist())
+            print(f"[resume] existing CarSeq loaded: {len(existing_ids):,}")
+        except Exception as e:
+            print(f"[resume] load existing ids failed: {e}")
 
     total_saved = 0
     for cat in categories:
@@ -437,6 +450,8 @@ def crawl_market_to_mysql(
         print(f"[{market_key}] '{cat}' 대상 {total:,}건")
 
         saved = 0
+        consecutive_seen_pages = 0
+
         for offset in range(0, total, page_size):
             params = {"count": "false", "q": action, "sr": f"|{sort}|{offset}|{page_size}"}
             data = get_json(s, params)
@@ -447,25 +462,54 @@ def crawl_market_to_mysql(
             raw = pd.json_normalize(rows, max_level=1)
             shaped = shape_rows(raw, pageid=conf["pageid"], category_fallback=cat, market_key=market_key)
 
-            # 1) 차량번호 수집 (상세 HTML)
+            # 이어받기: 배치 내부 중복 제거 + 기존 CarSeq 스킵
+            if resume_from_db and not shaped.empty:
+                shaped = shaped[~shaped["CarSeq"].isna()].copy()
+                shaped["CarSeq"] = shaped["CarSeq"].astype(int)
+                shaped.drop_duplicates(subset=["CarSeq"], inplace=True)
+
+                before = len(shaped)
+                shaped = shaped[~shaped["CarSeq"].isin(existing_ids)]
+                after = len(shaped)
+
+                if after == 0:
+                    consecutive_seen_pages += 1
+                else:
+                    consecutive_seen_pages = 0
+
+                if consecutive_seen_pages >= stop_after_consecutive_seen:
+                    print(f"[{market_key}] '{cat}' 오래된 구간 감지 → 조기 종료 (offset={offset})")
+                    break
+
+            if shaped.empty:
+                time.sleep(sleep_sec)
+                continue
+
+            # 1) 차량번호 수집
             if fetch_vehicle_no:
                 shaped = attach_vehicle_no(shaped, max_workers=vehno_workers, throttle_sec=vehno_throttle)
 
-            # 2) open record(차량 세부정보)로 최초등록일 수집
+            # 2) 최초등록일만 open-record에서
             shaped = enrich_with_open_record(shaped, max_workers=detail_workers, throttle_sec=detail_throttle)
 
-            # 3) readside(category/spec)로 출시가/색상 수집
+            # 3) 출시가/색상
             if fetch_detail:
                 shaped = enrich_with_readside(shaped, max_workers=detail_workers, throttle_sec=detail_throttle)
 
             upsert_df(engine, shaped, "vehicles")
             saved += len(shaped)
+
+            # 방금 본 CarSeq를 즉시 합쳐 다음 페이지에서 스킵률 향상
+            if resume_from_db:
+                existing_ids.update(shaped["CarSeq"].dropna().astype(int).tolist())
+
             time.sleep(sleep_sec)
 
         print(f"[{market_key}] '{cat}' 저장 완료: {saved:,}건")
         total_saved += saved
 
     print(f"[{market_key}] 총 {total_saved:,}건 UPSERT 완료 → vehicles")
+
 
 def main():
     crawl_market_to_mysql(
@@ -480,6 +524,8 @@ def main():
         fetch_detail=True,
         detail_workers=8,
         detail_throttle=0.0,
+        resume_from_db=True,             
+        stop_after_consecutive_seen=1,   
     )
     crawl_market_to_mysql(
         "foreign",
@@ -493,6 +539,8 @@ def main():
         fetch_detail=True,
         detail_workers=8,
         detail_throttle=0.0,
+        resume_from_db=True,             
+        stop_after_consecutive_seen=1,   
     )
 
 if __name__ == "__main__":
