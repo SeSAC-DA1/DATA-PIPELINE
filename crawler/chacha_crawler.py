@@ -7,9 +7,9 @@ from urllib3.util.retry import Retry
 # 프로젝트 루트 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db.connection import session_scope, Engine
+from db.connection import session_scope
 from db.model import (
-    Vehicle, OptionMaster, VehicleOption, Base, 
+    Vehicle, OptionMaster, VehicleOption,
     create_tables_if_not_exist, check_database_status
 )
 from crawler.option_mapping import (
