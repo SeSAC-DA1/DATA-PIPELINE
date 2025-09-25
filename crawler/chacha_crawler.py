@@ -896,11 +896,11 @@ def crawl_kb_chachacha_with_options():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚗 KB 차차차 크롤러 시작")
+    print("KB 차차차 크롤러 시작")
     print("=" * 60)
     try:
         crawl_kb_chachacha_with_options()
     except Exception as e:
-        print(f"❌ 크롤러 실행 중 오류 발생: {e}")
+        print(f"크롤러 실행 중 오류 발생: {e}")
         import traceback
         traceback.print_exc()
