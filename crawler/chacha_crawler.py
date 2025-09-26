@@ -433,12 +433,23 @@ def get_car_options_from_html(car_seq: str, s: requests.Session) -> List[Dict[st
 
         resp = s.post(OPTION_LAYER_URL, data=payload, headers=headers, timeout=15)
         if resp.status_code != 200:
+            print(f"[옵션 요청 실패] carSeq: {car_seq} - HTTP {resp.status_code}")
             return []
 
         soup = BeautifulSoup(resp.text, "html.parser")
         hidden = soup.select_one("input#carOption")
-        codes = [c for c in (hidden["value"].split(",") if hidden and hidden.has_attr("value") else []) if c]
-
+        
+        if not hidden or not hidden.has_attr("value"):
+            print(f"[옵션 없음] carSeq: {car_seq} - 옵션 정보가 없습니다")
+            return []
+        
+        codes = [c for c in hidden["value"].split(",") if c]
+        
+        if not codes:
+            print(f"[옵션 없음] carSeq: {car_seq} - 옵션 코드가 비어있습니다")
+            return []
+        
+        print(f"[옵션 발견] carSeq: {car_seq} - {len(codes)}개 옵션")
         return [{"code": c} for c in codes]
 
     except Exception as e:
@@ -630,9 +641,15 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
                     existing_vehiclenos.add(vehicle_data['vehicleno'])
                 
                 options = record.get('options', [])
-                if options and vehicle.vehicleid:
-                    options_saved = save_vehicle_options_single(vehicle.vehicleid, options, session)
-                    options_saved_count += options_saved
+                if vehicle.vehicleid:
+                    if options:
+                        # 옵션이 있는 경우
+                        options_saved = save_vehicle_options_single(vehicle.vehicleid, options, session)
+                        options_saved_count += options_saved
+                        vehicle.has_options = True
+                    else:
+                        # 옵션이 없는 경우 명시적으로 기록
+                        vehicle.has_options = False
                     
             except Exception as e:
                 print(f"[저장 실패] carseq: {vehicle_data['carseq']}: {e}")
@@ -691,15 +708,13 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
 # =============================================================================
 
 def crawl_options_for_existing_vehicles(batch_size: int = 50, delay: float = 0.5):
-    """기존 차량들의 옵션 정보만 크롤링"""
+    """옵션 상태가 미확인인 차량들의 옵션 정보만 크롤링"""
     
     with session_scope() as db_session:
-        # 서브쿼리를 사용한 최적화된 조회
+        # 옵션 상태가 미확인인 차량들만 조회
         vehicles_without_options = db_session.query(Vehicle).filter(
             Vehicle.platform == 'kb_chachacha',
-            ~Vehicle.vehicleid.in_(
-                db_session.query(VehicleOption.vehicle_id).distinct()
-            )
+            Vehicle.has_options.is_(None)  
         ).all()
         
         print(f"[옵션 크롤링 대상] {len(vehicles_without_options)}대")
@@ -725,18 +740,23 @@ def crawl_options_batch(vehicles: List[Vehicle], requests_session: requests.Sess
     """차량 배치의 옵션 정보 크롤링 (배치 처리 방식)"""
     processed_count = 0
     vehicles_options = []  # 배치 데이터 수집
+    vehicles_with_options = []  # 옵션이 있는 차량들
+    vehicles_without_options = []  # 옵션이 없는 차량들
     
     # 1단계: 모든 차량의 옵션 크롤링
     for vehicle in vehicles:
         try:
             options = get_car_options_from_html(str(vehicle.carseq), requests_session)
             
-            if options:  # 옵션이 있는 경우만 추가
+            if options:  # 옵션이 있는 경우
                 vehicles_options.append({
                     'vehicle_id': vehicle.vehicleid,
                     'options': options
                 })
+                vehicles_with_options.append(vehicle.vehicleid)
                 processed_count += 1
+            else:  # 옵션이 없는 경우
+                vehicles_without_options.append(vehicle.vehicleid)
             
         except Exception as e:
             print(f"[옵션 크롤링 실패] carseq: {vehicle.carseq}: {e}")
@@ -747,6 +767,23 @@ def crawl_options_batch(vehicles: List[Vehicle], requests_session: requests.Sess
     if vehicles_options:
         total_saved = save_vehicle_options_batch(vehicles_options)
         print(f"[배치 저장 완료] {len(vehicles_options)}대 차량, {total_saved}개 옵션 저장")
+    
+    # 3단계: has_options 플래그 업데이트
+    with session_scope() as session:
+        # 옵션이 있는 차량들
+        if vehicles_with_options:
+            session.query(Vehicle).filter(
+                Vehicle.vehicleid.in_(vehicles_with_options)
+            ).update({Vehicle.has_options: True}, synchronize_session=False)
+        
+        # 옵션이 없는 차량들
+        if vehicles_without_options:
+            session.query(Vehicle).filter(
+                Vehicle.vehicleid.in_(vehicles_without_options)
+            ).update({Vehicle.has_options: False}, synchronize_session=False)
+        
+        session.commit()
+        print(f"[플래그 업데이트] 옵션 있음: {len(vehicles_with_options)}대, 옵션 없음: {len(vehicles_without_options)}대")
     
     return processed_count
 
@@ -835,15 +872,33 @@ def crawl_kb_chachacha():
 # =============================================================================
 
 def check_vehicles_without_options() -> int:
-    """옵션이 없는 차량 수를 확인합니다."""
+    """옵션 상태가 미확인인 차량 수를 확인합니다."""
     with session_scope() as session:
         count = session.query(Vehicle).filter(
             Vehicle.platform == 'kb_chachacha',
-            ~Vehicle.vehicleid.in_(
-                session.query(VehicleOption.vehicle_id).distinct()
-            )
+            Vehicle.has_options.is_(None)  # 옵션 상태가 미확인인 차량
         ).count()
         return count
+
+def get_vehicles_without_options_details() -> List[Dict[str, Any]]:
+    """옵션 상태가 미확인인 차량들의 상세 정보를 반환합니다."""
+    with session_scope() as session:
+        vehicles = session.query(Vehicle).filter(
+            Vehicle.platform == 'kb_chachacha',
+            Vehicle.has_options.is_(None)  # 옵션 상태가 미확인인 차량
+        ).limit(10).all()  # 샘플로 10개만 조회
+        
+        result = []
+        for vehicle in vehicles:
+            result.append({
+                'carseq': vehicle.carseq,
+                'manufacturer': vehicle.manufacturer,
+                'model': vehicle.model,
+                'generation': vehicle.generation,
+                'price': vehicle.price,
+                'year': vehicle.modelyear
+            })
+        return result
 
 def crawl_options_only():
     """옵션 크롤링만 실행"""
@@ -870,11 +925,19 @@ def crawl_kb_chachacha_with_options():
         print("[DB 연결 실패] 데이터베이스 연결을 확인해주세요.")
         return
     
-    # 3. 옵션이 없는 차량 확인
+    # 3. 옵션 상태 미확인 차량 확인
     vehicles_without_options = check_vehicles_without_options()
-    print(f"[옵션 상태 확인] 옵션이 없는 차량: {vehicles_without_options:,}대")
+    print(f"[옵션 상태 확인] 옵션 상태 미확인 차량: {vehicles_without_options:,}대")
     
-    # 4. 옵션이 없는 차량이 있으면 옵션 크롤링 먼저 실행
+    # 옵션 상태 미확인 차량들의 샘플 정보 표시
+    if vehicles_without_options > 0:
+        sample_vehicles = get_vehicles_without_options_details()
+        print(f"[옵션 상태 미확인 차량 샘플] (최대 10대):")
+        for vehicle in sample_vehicles:
+            print(f"  - {vehicle['manufacturer']} {vehicle['model']} {vehicle['generation']} "
+                  f"(carSeq: {vehicle['carseq']}, 가격: {vehicle['price']}만원, 연식: {vehicle['year']})")
+    
+    # 4. 옵션 상태 미확인 차량이 있으면 옵션 크롤링 먼저 실행
     if vehicles_without_options > 0:
         print(f"[옵션 크롤링 필요] {vehicles_without_options:,}대의 옵션 정보를 먼저 크롤링합니다.")
         crawl_options_only()
@@ -883,7 +946,7 @@ def crawl_kb_chachacha_with_options():
         remaining = check_vehicles_without_options()
         print(f"[옵션 크롤링 완료] 남은 차량: {remaining:,}대")
     else:
-        print("[옵션 크롤링 불필요] 모든 차량의 옵션 정보가 이미 있습니다.")
+        print("[옵션 크롤링 불필요] 모든 차량의 옵션 상태가 이미 확인되었습니다.")
     
     # 5. 통합 크롤링 실행 (새로운 차량들)
     print("[통합 크롤링 시작]")
@@ -895,9 +958,7 @@ def crawl_kb_chachacha_with_options():
         print("[크롤링 완료] 새로운 차량이 없습니다.")
 
 if __name__ == "__main__":
-    print("=" * 60)
     print("KB 차차차 크롤러 시작")
-    print("=" * 60)
     try:
         crawl_kb_chachacha_with_options()
     except Exception as e:

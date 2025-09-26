@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint, Text
+from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from .connection import session_scope, Engine
 
@@ -29,6 +29,7 @@ class Vehicle(Base):
     location = Column(String) 
     detailurl = Column(String)
     photo = Column(String)
+    has_options = Column(Boolean, default=None)  # NULL: 미확인, TRUE: 옵션 있음, FALSE: 옵션 없음
 
 class OptionMaster(Base):
     __tablename__ = 'option_masters'
