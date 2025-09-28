@@ -19,6 +19,7 @@ class Vehicle(Base):
     trim = Column(String)
     fueltype = Column(String)
     transmission = Column(String)
+    displacement = Column(Integer)  # 배기량 (cc 단위)
     colorname = Column(String)
     modelyear = Column(Integer)
     firstregistrationdate = Column(Integer)

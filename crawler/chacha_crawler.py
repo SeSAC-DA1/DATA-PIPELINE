@@ -410,11 +410,25 @@ def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] =
             base = int(m.group(1))
             newcar_price = int(base * 1.1)
 
+        # 배기량 파싱 (cc 단위로 변환)
+        displacement_str = kv.get("배기량", "") or kv.get("엔진", "")
+        displacement = 0
+        if displacement_str:
+            # "1.6L", "1600cc", "1,600cc" 등의 형태를 처리
+            displacement_match = re.search(r'(\d+(?:,\d+)*)\s*(?:cc|L)', displacement_str)
+            if displacement_match:
+                displacement_value = displacement_match.group(1).replace(',', '')
+                displacement = int(displacement_value)
+                # L 단위인 경우 cc로 변환 (예: 1.6L -> 1600cc)
+                if 'L' in displacement_str and displacement < 1000:
+                    displacement = int(displacement * 1000)
+
         return {
             "fuel": kv.get("연료", ""),
             "transmission": kv.get("변속기", ""),
             "class": kv.get("차종", ""),
             "color": kv.get("색상", ""),
+            "displacement": displacement,
             "image_url": image_url or "",
             "newcar_price": newcar_price,
         }, s
@@ -488,6 +502,7 @@ def create_vehicle_record(api_data: Dict[str, Any], html_data: Dict[str, Any], m
         "trim": api_data.get("gradeName", ""),
         "fuel_type": html_data.get("fuel", ""),
         "transmission": html_data.get("transmission", ""),
+        "displacement": html_data.get("displacement", 0),
         "color_name": html_data.get("color", "") or api_data.get("color", ""),
         "model_year": api_data.get("yymm", ""),
         "first_registration_date": api_data.get("regiDay", ""),

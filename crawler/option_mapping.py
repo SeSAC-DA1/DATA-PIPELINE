@@ -6,7 +6,7 @@ from db.connection import session_scope
 from db.model import OptionMaster, VehicleOption, Vehicle
 
 def initialize_global_options():
-    """77개 공통 옵션 마스터를 초기화합니다."""
+    """공통 옵션 마스터를 초기화합니다."""
     global_options_data = [
         # 외관/내장 (22개) - 공통 15개, KB차차차만 5개, 엔카만 2개
         ("SUNROOF", "선루프(일반)", "외관/내장"),
@@ -95,6 +95,8 @@ def initialize_global_options():
     ]
     
     try:
+        saved_count = 0
+        existing_count = 0
         with session_scope() as session:
             for option_code, option_name, option_group in global_options_data:
                 existing = session.query(OptionMaster).filter(
@@ -108,9 +110,13 @@ def initialize_global_options():
                         option_group=option_group
                     )
                     session.add(global_option)
+                    saved_count += 1
+                else:
+                    existing_count += 1
             
             session.commit()
-            print(f"[공통 옵션 초기화 완료] {len(global_options_data)}개 옵션 저장")
+            print(f"[공통 옵션 초기화 완료] 총 {len(global_options_data)}개 옵션 중 {existing_count}개 기존, {saved_count}개 신규 저장")
+            return saved_count
             
     except Exception as e:
         print(f"[공통 옵션 초기화 실패] {e}")
