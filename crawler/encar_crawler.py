@@ -20,6 +20,7 @@ BASE_URL = "https://api.encar.com/search/car/list/general"
 DETAIL_API_URL = "https://api.encar.com/v1/readside/vehicle"
 INSPECTION_API_URL = "https://api.encar.com/v1/readside/inspection/vehicle"
 DETAIL_PAGE_URL = "https://fem.encar.com/cars/detail"
+RECORD_API_URL = "https://api.encar.com/v1/readside/record/vehicle"
 
 # =============================================================================
 # 유틸리티 함수
@@ -60,10 +61,8 @@ def get_encar_api_data(url: str, session: requests.Session, params: Optional[Dic
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        # 404는 흔한 경우이므로 간단히 None 반환
-        if e.response and e.response.status_code == 404:
-            print(f"[API 정보 없음] URL: {url}, HTTP 404")
-        else:
+        # 404는 정상적인 경우이므로 출력하지 않음
+        if e.response and e.response.status_code != 404:
             print(f"[API 호출 오류] URL: {url}, 오류: {e}")
         return None
 
@@ -76,331 +75,535 @@ def get_car_list(session: requests.Session, q_filter: str, page: int, page_size:
 def fetch_vehicle_details(list_car_id: str, session: requests.Session) -> Optional[Dict]:
     """차량의 모든 상세 정보를 가져옵니다."""
     complete_info = get_encar_api_data(f"{DETAIL_API_URL}/{list_car_id}?include=CATEGORY,SPEC,OPTIONS,PHOTOS", session)
-    if not complete_info: return None
+    if not complete_info: 
+        return None
     
     real_vehicle_id = complete_info.get("vehicleId")
-    if not real_vehicle_id: return None
+    vehicle_no = complete_info.get("vehicleNo")
+    if not real_vehicle_id or not vehicle_no: 
+        return None
 
-    inspection_info = get_encar_api_data(f"{INSPECTION_API_URL}/{real_vehicle_id}", session)
-    if not inspection_info: return None
+    # record_info API 시도
+    record_info = get_encar_api_data(f"{RECORD_API_URL}/{real_vehicle_id}/open", session, params={"vehicleNo": vehicle_no})
     
-    return {"complete_info": complete_info, "inspection_info": inspection_info}
-
-def get_encar_total_count(session: requests.Session) -> int:
-    """전체 차량 수를 조회합니다."""
-    try:
-        params = {"count": "true", "q": "(And.Hidden.N._.CarType.Y.)", "inav": "|Metadata|Sort"}
-        data = get_encar_api_data(BASE_URL, session, params=params)
-        if data:
-            count = data.get("Count", 0)
-            print(f"[전체 차량 수] {count:,}대")
-            return count
-        else:
-            print("[전체 차량 수 조회 실패]")
-            return 0
-    except Exception as e:
-        print(f"[전체 차량 수 조회 오류] {e}")
-        return 0
-
-def get_encar_brand_count(session: requests.Session, brand: str) -> int:
-    """특정 브랜드의 차량 수를 조회합니다."""
-    try:
-        params = {"count": "true", "q": f"(And.Hidden.N._.(C.CarType.Y._.Manufacturer.{brand}.))", "inav": "|Metadata|Sort"}
-        data = get_encar_api_data(BASE_URL, session, params=params)
-        if data:
-            count = data.get("Count", 0)
-            print(f"[{brand} 브랜드 차량 수] {count:,}대")
-            return count
-        else:
-            print(f"[{brand} 브랜드 차량 수 조회 실패]")
-            return 0
-    except Exception as e:
-        print(f"[{brand} 브랜드 차량 수 조회 오류] {e}")
-        return 0
-
-def get_encar_modelgroup_count(session: requests.Session, brand: str, modelgroup: str) -> int:
-    """특정 모델그룹의 차량 수를 조회합니다."""
-    try:
-        params = {"count": "true", "q": f"(And.Hidden.N._.(C.CarType.Y._.(C.Manufacturer.{brand}._.ModelGroup.{modelgroup}.)))", "inav": "|Metadata|Sort"}
-        data = get_encar_api_data(BASE_URL, session, params=params)
-        if data:
-            count = data.get("Count", 0)
-            print(f"[{brand} {modelgroup} 모델그룹 차량 수] {count:,}대")
-            return count
-        else:
-            print(f"[{brand} {modelgroup} 모델그룹 차량 수 조회 실패]")
-            return 0
-    except Exception as e:
-        print(f"[{brand} {modelgroup} 모델그룹 차량 수 조회 오류] {e}")
-        return 0
-
-def get_encar_car_list(session: requests.Session, page: int, page_size: int, brand: str = None, modelgroup: str = None) -> Dict:
-    """차량 목록을 조회합니다."""
-    try:
-        start = page * page_size
-        
-        # 필터 조건 구성
-        if brand and modelgroup:
-            q_filter = f"(And.Hidden.N._.(C.CarType.Y._.(C.Manufacturer.{brand}._.ModelGroup.{modelgroup}.)))"
-        elif brand:
-            q_filter = f"(And.Hidden.N._.(C.CarType.Y._.Manufacturer.{brand}.))"
-        else:
-            q_filter = "(And.Hidden.N._.CarType.Y.)"
-        
-        params = {"q": q_filter, "sr": f"|ModifiedDate|{start}|{page_size}"}
-        data = get_encar_api_data(BASE_URL, session, params=params)
-        
-        if data:
-            return {
-                "SearchResults": data.get("SearchResults", []),
-                "Count": data.get("Count", 0)
+    # record_info가 없으면 차량검사 API 시도
+    if not record_info:
+        inspection_info = get_encar_api_data(f"{INSPECTION_API_URL}/{real_vehicle_id}", session)
+        if inspection_info:
+            record_info = {
+                "firstDate": inspection_info.get("firstRegistrationDate", "0"),
+                "inspectionData": inspection_info
             }
         else:
-            return {"SearchResults": [], "Count": 0}
-    except Exception as e:
-        print(f"[차량 목록 조회 오류] {e}")
-        return {"SearchResults": [], "Count": 0}
+            # 두 API 모두 실패한 경우에만 출력
+            print(f"  [API 실패] carseq: {real_vehicle_id} - record_info와 차량검사 API 모두 실패")
+            record_info = {}
+    
+    return {"complete_info": complete_info, "record_info": record_info}
 
-def get_encar_brands(session: requests.Session) -> List[str]:
-    """브랜드 목록을 조회합니다."""
+def get_encar_brands(session: requests.Session, car_type: str = "Y") -> List[str]:
+    """브랜드 목록을 조회합니다. car_type: Y(국산), N(수입)"""
     try:
-        params = {"count": "true", "q": "(And.Hidden.N._.CarType.Y.)", "inav": "|Metadata|Sort"}
+        params = {"count": "true", "q": f"(And.Hidden.N._.CarType.{car_type}.)", "inav": "|Metadata|Sort"}
         data = get_encar_api_data(BASE_URL, session, params=params)
-        if not data: return []
-        
-        try:
-            brand_facets = data['iNav']['Nodes'][1]['Facets'][0]['Refinements']['Nodes'][0]['Facets']
-            brands = [f['Value'] for f in brand_facets if f.get("Count", 0) > 0]
-            print(f"[브랜드 목록] {len(brands)}개 브랜드 발견")
-            return brands
-        except (KeyError, IndexError):
-            print("[브랜드 파싱 실패]")
+        if not data: 
             return []
-    except Exception as e:
-        print(f"[브랜드 목록 조회 오류] {e}")
+        
+        brand_facets = data['iNav']['Nodes'][1]['Facets'][0]['Refinements']['Nodes'][0]['Facets']
+        brands = [f['Value'] for f in brand_facets if f.get("Count", 0) > 0]
+        origin_type = "국산" if car_type == "Y" else "수입"
+        print(f"[{origin_type} 브랜드] {len(brands)}개")
+        return brands
+    except Exception:
         return []
 
-def get_encar_modelgroups_by_brand(brand: str, session: requests.Session) -> List[str]:
-    """특정 브랜드의 모델그룹 목록을 조회합니다."""
+def get_encar_modelgroups_by_brand(brand: str, session: requests.Session, car_type: str = "Y") -> List[str]:
+    """특정 브랜드의 모델그룹 목록을 조회합니다. car_type: Y(국산), N(수입)"""
     try:
-        params = {"count": "true", "q": f"(And.Hidden.N._.(C.CarType.Y._.Manufacturer.{brand}.))", "inav": "|Metadata|Sort"}
+        params = {"count": "true", "q": f"(And.Hidden.N._.(C.CarType.{car_type}._.Manufacturer.{brand}.))", "inav": "|Metadata|Sort"}
         data = get_encar_api_data(BASE_URL, session, params=params)
-        if not data: return []
-        
-        try:
-            brand_facet = next((f for f in data['iNav']['Nodes'][1]['Facets'][0]['Refinements']['Nodes'][0]['Facets'] if f['Value'] == brand), None)
-            if not brand_facet: return []
-            modelgroup_facets = brand_facet['Refinements']['Nodes'][0]['Facets']
-            modelgroups = [f['Value'] for f in modelgroup_facets if f.get("Count", 0) > 0]
-            print(f"[{brand} 모델그룹 추출] {len(modelgroups)}개 발견")
-            return modelgroups
-        except (KeyError, IndexError, StopIteration):
-            print(f"[{brand} 모델그룹 파싱 실패]")
+        if not data: 
             return []
-    except Exception as e:
-        print(f"[{brand} 모델그룹 조회 오류] {e}")
+        
+        brand_facet = next((f for f in data['iNav']['Nodes'][1]['Facets'][0]['Refinements']['Nodes'][0]['Facets'] if f['Value'] == brand), None)
+        if not brand_facet: 
+            return []
+        modelgroup_facets = brand_facet['Refinements']['Nodes'][0]['Facets']
+        modelgroups = [f['Value'] for f in modelgroup_facets if f.get("Count", 0) > 0]
+        return modelgroups
+    except Exception:
         return []
 
 # =============================================================================
 # 데이터 변환 및 저장
 # =============================================================================
-def convert_to_vehicle_record(encar_data: Dict, details: Dict) -> Optional[Dict]:
+def convert_to_vehicle_record(encar_data: Dict, details: Dict, car_type: str = "Y") -> Optional[Dict]:
     try:
         complete_info = details["complete_info"]
-        inspection_info = details["inspection_info"]
+        record_info = details["record_info"]
         real_vehicle_id = str(complete_info["vehicleId"])
         
         spec = complete_info.get("spec", {})
         category = complete_info.get("category", {})
-        inspection_master = inspection_info.get("master", {}).get("detail", {})
-        first_reg_date_str = str(inspection_master.get("firstRegistrationDate", "0")).replace("-", "")
         
-        return {
-            "VehicleNo": complete_info.get("vehicleNo"),
-            "CarSeq": real_vehicle_id,
-            "Platform": "encar",
-            "Origin": "국산",
-            "CarType": spec.get("bodyName"),
-            "Manufacturer": category.get("manufacturerName"),
-            "Model": category.get("modelName"),
-            "Generation": category.get("modelGroupName"),
-            "Trim": category.get("gradeName"),
-            "FuelType": spec.get("fuelName"),
-            "Transmission": spec.get("transmissionName"),
-            "Displacement": int(spec.get("displacement") or 0),
-            "ColorName": spec.get("colorName"),
-            "ModelYear": int(category.get("formYear") or 0),
-            "FirstRegistrationDate": int(first_reg_date_str) if first_reg_date_str.isdigit() else 0,
-            "Distance": int(spec.get("mileage") or 0),
-            "Price": int(encar_data.get("Price") or 0),
-            "OriginPrice": int(category.get("originPrice") or 0),
-            "SellType": encar_data.get("SellType"),
-            "Location": encar_data.get("OfficeCityState"),
-            "DetailURL": f"{DETAIL_PAGE_URL}/{real_vehicle_id}",
-            "Photo": f"https://ci.encar.com{encar_data['Photo']}" if encar_data.get("Photo") and encar_data['Photo'].startswith('/carpicture') else encar_data.get("Photo"),
-            "options": complete_info.get("options", {}).get("standard", [])
+        # firstDate 처리
+        first_date = record_info.get("firstDate", "0")
+        if not first_date or first_date == "0":
+            inspection_data = record_info.get("inspectionData", {})
+            first_date = inspection_data.get("firstRegistrationDate", "0")
+        
+        first_reg_date_str = str(first_date).replace("-", "")
+        
+        # 옵션 데이터 수집
+        options_data = complete_info.get("options", {})
+        standard_options = options_data.get("standard", [])
+        
+        result = {
+            "vehicleno": complete_info.get("vehicleNo"),
+            "carseq": int(real_vehicle_id),
+            "platform": "encar",
+            "origin": "국산" if car_type == "Y" else "수입",
+            "cartype": spec.get("bodyName"),
+            "manufacturer": category.get("manufacturerName"),
+            "model": category.get("modelName"),
+            "generation": category.get("modelGroupName"),
+            "trim": category.get("gradeName"),
+            "fueltype": spec.get("fuelName"),
+            "transmission": spec.get("transmissionName"),
+            "displacement": int(spec.get("displacement") or 0),
+            "colorname": spec.get("colorName"),
+            "modelyear": int(category.get("formYear") or 0),
+            "firstregistrationdate": int(first_reg_date_str) if first_reg_date_str.isdigit() else 0,
+            "distance": int(spec.get("mileage") or 0),
+            "price": int(encar_data.get("Price") or 0),
+            "originprice": int(category.get("originPrice") or 0),
+            "selltype": encar_data.get("SellType"),
+            "location": encar_data.get("OfficeCityState"),
+            "detailurl": f"{DETAIL_PAGE_URL}/{real_vehicle_id}",
+            "photo": f"https://ci.encar.com{encar_data['Photo']}" if encar_data.get("Photo") and encar_data['Photo'].startswith('/carpicture') else encar_data.get("Photo"),
+            "options": standard_options
         }
-    except (KeyError, TypeError) as e:
-        print(f"  [데이터 변환 오류] 필수 키 누락: {e}")
+        
+        return result
+    except (KeyError, TypeError):
         return None
 
 def save_data_to_db(records: List[Dict]):
-    if not records: return 0
+    if not records: 
+        return 0
+    
     with session_scope() as session:
         try:
-            vehicle_mappings = [{k: v for k, v in rec.items() if k != 'options'} for rec in records]
+            # 차량 정보 저장 (has_options 포함)
+            vehicle_mappings = []
+            for rec in records:
+                vehicle_data = {k: v for k, v in rec.items() if k != 'options'}
+                # has_options 설정: 옵션이 있으면 True, 없으면 False
+                platform_options = rec.get('options', [])
+                global_codes = convert_platform_options_to_global(platform_options, 'encar')
+                vehicle_data['has_options'] = len(global_codes) > 0
+                vehicle_mappings.append(vehicle_data)
+            
             session.bulk_insert_mappings(Vehicle, vehicle_mappings)
             
-            vehicle_map = {v.carseq: v.vehicleid for v in session.query(Vehicle.vehicleid, Vehicle.carseq).filter(Vehicle.carseq.in_([rec['CarSeq'] for rec in records]))}
-            all_option_codes = {code for rec in records for code in rec.get('options', [])}
-            option_master_map = {opt.option_code: opt.option_id for opt in session.query(OptionMaster).filter(OptionMaster.option_code.in_(all_option_codes))}
-
+            # 저장된 차량 ID 매핑
+            vehicle_map = {v.carseq: v.vehicleid for v in session.query(Vehicle.vehicleid, Vehicle.carseq).filter(Vehicle.carseq.in_([rec['carseq'] for rec in records]))}
+            
+            print(f"  [차량 저장] {len(records)}대 저장 완료")
+            
+            # 옵션 처리
             options_to_save = []
             for rec in records:
-                vehicle_id = vehicle_map.get(rec['CarSeq'])
+                vehicle_id = vehicle_map.get(rec['carseq'])
                 if vehicle_id:
-                    global_codes = convert_platform_options_to_global(rec.get('options', []), 'encar')
+                    platform_options = rec.get('options', [])
+                    global_codes = convert_platform_options_to_global(platform_options, 'encar')
+                    
+                    # OptionMaster에서 option_id 찾기
                     for code in global_codes:
-                        option_id = option_master_map.get(code)
-                        if option_id:
-                            options_to_save.append({'vehicle_id': vehicle_id, 'option_id': option_id})
+                        option = session.query(OptionMaster).filter(OptionMaster.option_code == code).first()
+                        if option:
+                            options_to_save.append({'vehicle_id': vehicle_id, 'option_id': option.option_id})
             
+            # 옵션 저장
             if options_to_save:
                 session.bulk_insert_mappings(VehicleOption, options_to_save)
+                print(f"  [옵션 저장] {len(options_to_save)}개 옵션 저장 완료")
             
-            print(f"  [DB 저장] {len(records)}대 차량, {len(options_to_save)}개 옵션 저장 완료")
             return len(records)
         except Exception as e:
-            print(f"  [DB 배치 저장 오류] {e}")
+            print(f"  [DB 저장 오류] {e}")
             session.rollback()
             return 0
 
 # =============================================================================
 # 크롤링 로직
-#==============================================================================
-def crawl_encar_modelgroup(brand: str, modelgroup: str, session: requests.Session, existing_data: Dict[str, set], max_pages: int = 1000, page_size: int = 50):
-    """특정 모델그룹 크롤링 (선-필터링 및 병렬 처리, 최종 중복 제거 적용)"""
-    print(f"\n[모델그룹 크롤링 시작] {brand} {modelgroup}")
+# =============================================================================
+def crawl_encar_model(brand: str, model: str, session: requests.Session, existing_data: Dict[str, set], max_pages: int = 1000, page_size: int = 50, car_type: str = "Y"):
+    """특정 모델그룹 크롤링"""
+    print(f"\n[{brand} {model}] 크롤링 시작")
     
-    total_processed_for_modelgroup = 0
+    total_processed = 0
     
     for page in range(max_pages):
-        q_filter = f"(And.Hidden.N._.(C.CarType.Y._.(C.Manufacturer.{brand}._.ModelGroup.{modelgroup}.)))"
+        q_filter = f"(And.Hidden.N._.(C.CarType.{car_type}._.(C.Manufacturer.{brand}._.ModelGroup.{model}.)))"
         car_list = get_car_list(session, q_filter, page, page_size)
         
         if not car_list:
-            print(f"  [{brand} {modelgroup} - 페이지 {page + 1}] 데이터 없음. 완료.")
+            print(f"  [완료] 더 이상 데이터 없음")
             break
         
-        new_cars_to_process = [car for car in car_list if car.get("Id") and str(car["Id"]) not in existing_data['list_ids']]
+        # 중복 제거
+        new_cars = [car for car in car_list if car.get("Id") and str(car["Id"]) not in existing_data['car_seqs']]
+        print(f"  [페이지 {page + 1}] {len(car_list)}대 중 {len(new_cars)}대 신규")
         
-        skipped_count = len(car_list) - len(new_cars_to_process)
-        print(f"  [{brand} {modelgroup} - 페이지 {page + 1}] {len(car_list)}대 중 {skipped_count}대 중복(목록ID), {len(new_cars_to_process)}대 신규 처리 시작...")
-        
-        if not new_cars_to_process:
+        if not new_cars:
             _sleep_with_jitter(0.2, 0.1)
             continue
 
+        # 병렬 처리로 차량 상세 정보 수집
         processed_records = []
+        
         with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_car = {executor.submit(fetch_vehicle_details, car["Id"], session): car for car in new_cars_to_process}
+            future_to_car = {executor.submit(fetch_vehicle_details, car["Id"], session): car for car in new_cars}
             
             for future in as_completed(future_to_car):
                 encar_data = future_to_car[future]
                 try:
                     details = future.result()
                     if details:
-                        record = convert_to_vehicle_record(encar_data, details)
+                        record = convert_to_vehicle_record(encar_data, details, car_type)
                         if record:
                             processed_records.append(record)
+                
                 except Exception as e:
-                    print(f"  [병렬 처리 오류] Car ID {encar_data.get('Id', 'N/A')}: {e}")
+                    car_id = encar_data.get('Id', 'N/A')
+                    print(f"  [처리 오류] Car ID {car_id}: {type(e).__name__}: {e}")
+                    # 에러 발생한 차량은 로그에 기록하되 크롤링은 계속 진행
 
-        # 병렬 처리 후, DB 저장 전에 배치 내/외부의 모든 중복을 최종 제거
-        final_records_to_save = []
+        # 최종 중복 제거
+        final_records = []
         seen_in_batch = set()
-
         for record in processed_records:
-            car_seq = record['CarSeq']
-            vehicle_no = record['VehicleNo']
+            car_seq = str(record['carseq'])
+            vehicle_no = record['vehicleno']
             
-            # DB에 이미 있는 데이터인지 최종 확인
-            if car_seq in existing_data['car_seqs'] or (vehicle_no and vehicle_no in existing_data['vehicle_nos']):
+            if (car_seq in existing_data['car_seqs'] or 
+                (vehicle_no and vehicle_no in existing_data['vehicle_nos']) or
+                (vehicle_no and vehicle_no in seen_in_batch)):
                 continue
-
-            # 현재 처리중인 배치 내에서 중복인지 확인 (차량번호 기준)
-            if vehicle_no and vehicle_no in seen_in_batch:
-                continue
-
-            # 모든 중복 체크를 통과한 경우에만 최종 목록에 추가
-            final_records_to_save.append(record)
+            
+            final_records.append(record)
             if vehicle_no:
                 seen_in_batch.add(vehicle_no)
-        
-        print(f"  [최종 필터링] {len(processed_records)}건 → {len(final_records_to_save)}건 (중복 제거)")
 
-        if final_records_to_save:
-            saved_count = save_data_to_db(final_records_to_save)
-            total_processed_for_modelgroup += saved_count
+        # DB 저장
+        if final_records:
+            saved_count = save_data_to_db(final_records)
+            total_processed += saved_count
             
-            # 새로 저장된 정보를 기존 데이터 세트에 실시간으로 추가
-            for rec in final_records_to_save:
-                original_id = next((car['Id'] for car in new_cars_to_process if str(car.get("Id")) == rec["CarSeq"]), rec["CarSeq"])
-                existing_data['list_ids'].add(original_id)
-                existing_data['car_seqs'].add(rec['CarSeq'])
-                if rec['VehicleNo']:
-                    existing_data['vehicle_nos'].add(rec['VehicleNo'])
+            # 기존 데이터에 추가
+            for rec in final_records:
+                existing_data['car_seqs'].add(str(rec['carseq']))
+                if rec['vehicleno']:
+                    existing_data['vehicle_nos'].add(rec['vehicleno'])
         
         _sleep_with_jitter(1.0, 0.5)
         
-    return total_processed_for_modelgroup
+    return total_processed
 
-def crawl_encar_with_options(max_pages_per_modelgroup: int = 1000, page_size: int = 50):
-    """엔카 크롤러 메인 함수"""
-    print("[엔카 크롤링 시작]")
+def crawl_encar_daily(max_pages_per_modelgroup: int = 1000, page_size: int = 50):
+    """일반 크롤링 함수 (평일용) - 새 데이터만 수집"""
+    print("[일반 크롤링 시작] - 새 데이터 수집")
     
     create_tables_if_not_exist()
-    if not check_database_status(): return
+    if not check_database_status(): 
+        return
     initialize_global_options()
     
     session = build_session()
     
-    total_count_data = get_encar_api_data(BASE_URL, session, params={"count": "true", "q": "(And.Hidden.N._.CarType.Y.)"})
-    print(f"[전체 차량 수] {total_count_data.get('Count', 0):,}대")
-    
+    # 기존 데이터 조회 (한 번만)
     with session_scope() as db_session:
-        # DB의 carseq를 문자열(str)로 조회해야 api에서 주는 데이터가 str이라 중복체크할때 문제 없음
         existing_car_seqs = {str(r[0]) for r in db_session.query(Vehicle.carseq).filter(Vehicle.platform == 'encar').all() if r[0]}
         existing_vehicle_nos = {r[0] for r in db_session.query(Vehicle.vehicleno).filter(Vehicle.vehicleno.isnot(None)).all()}
     
-    #  목록 ID(list_ids)도 중복 체크 대상에 포함/ list_ids는 같은 차량이 다른 광고 id로 올라와서 추적해야 할때 사용
-    existing_data = {'car_seqs': existing_car_seqs, 'vehicle_nos': existing_vehicle_nos, 'list_ids': set(existing_car_seqs)}
-    print(f"[DB 확인] 기존 엔카 차량 {len(existing_data['car_seqs']):,}대, 차량번호 {len(existing_data['vehicle_nos']):,}대")
+    existing_data = {
+        'car_seqs': existing_car_seqs, 
+        'vehicle_nos': existing_vehicle_nos
+    }
+    print(f"[DB 확인] 기존 차량 {len(existing_data['car_seqs']):,}대")
     
-    major_brands = get_encar_brands(session)
-    if not major_brands:
-        print("[브랜드 목록 조회 실패] 크롤링 종료.")
-        return
-
-    for brand in major_brands:
-        print(f"\n{'='*50}\n[브랜드 처리 시작] {brand}")
-        modelgroups = get_encar_modelgroups_by_brand(brand, session)
-        if not modelgroups:
-            print(f"  [{brand}] 모델그룹 없음. 건너뜁니다.")
+    # 국산차와 수입차를 순차적으로 처리하는 루프
+    for car_type, origin_name in [("Y", "국산"), ("N", "수입")]:
+        print(f"\n{'='*50}\n[{origin_name} 크롤링 시작]")
+        
+        # 전체 차량 수 조회
+        total_count_data = get_encar_api_data(BASE_URL, session, params={"count": "true", "q": f"(And.Hidden.N._.CarType.{car_type}.)"})
+        print(f"[전체 {origin_name} 수] {total_count_data.get('Count', 0):,}대")
+        
+        # 해당 타입의 브랜드 목록 조회
+        major_brands = get_encar_brands(session, car_type)
+        if not major_brands:
+            print(f"[{origin_name}] 브랜드 목록 조회 실패. 건너뜁니다.")
             continue
-            
-        for modelgroup in modelgroups:
-            modelgroup_count_data = get_encar_api_data(BASE_URL, session, params={"count": "true", "q": f"(And.Hidden.N._.(C.CarType.Y._.(C.Manufacturer.{brand}._.ModelGroup.{modelgroup}.)))"})
-            modelgroup_count = modelgroup_count_data.get("Count", 0) if modelgroup_count_data else 0
-            
-            if modelgroup_count > 0:
-                required_pages = (modelgroup_count + page_size - 1) // page_size
-                crawl_encar_modelgroup(brand, modelgroup, session, existing_data, required_pages, page_size)
 
-    print(f"\n[엔카 크롤링 최종 완료] 현재 DB의 엔카 차량: {len(existing_data['car_seqs']):,}대")
+        for brand in major_brands:
+            print(f"\n--- [브랜드] {brand} ---")
+            modelgroups = get_encar_modelgroups_by_brand(brand, session, car_type)
+            if not modelgroups:
+                continue
+            
+            for modelgroup in modelgroups:
+                # 모델그룹별 차량 수 확인
+                count_data = get_encar_api_data(BASE_URL, session, params={"count": "true", "q": f"(And.Hidden.N._.(C.CarType.{car_type}._.(C.Manufacturer.{brand}._.ModelGroup.{modelgroup}.)))"})
+                modelgroup_count = count_data.get("Count", 0) if count_data else 0
+                
+                if modelgroup_count > 0:
+                    required_pages = (modelgroup_count + page_size - 1) // page_size
+                    crawl_encar_model(brand, modelgroup, session, existing_data, required_pages, page_size, car_type)
+
+    print(f"\n[일반 크롤링 완료] 현재 DB의 엔카 차량: {len(existing_data['car_seqs']):,}대")
+
+def cleanup_deleted_vehicles_weekly(batch_size: int = 50):
+    """주기적 정리 함수 (주말용) - 삭제된 차량 정리"""
+    print("[주기적 정리 시작] - 삭제된 차량 정리")
+    
+    total_deleted = 0
+    
+    with session_scope() as session:
+        # 전체 엔카 차량 수 확인
+        total_vehicles = session.query(Vehicle).filter(Vehicle.platform == 'encar').count()
+        print(f"[전체 엔카 차량] {total_vehicles:,}대 검사 예정")
+        
+        offset = 0
+        while True:
+            # DB에 있는 모든 엔카 차량을 배치 단위로 조회
+            vehicles_to_check = session.query(Vehicle).filter(
+                Vehicle.platform == 'encar'
+            ).offset(offset).limit(batch_size).all()
+            
+            if not vehicles_to_check:
+                break
+            
+            print(f"[삭제된 차량 확인] {len(vehicles_to_check)}대 차량 확인 중...")
+            
+            with requests.Session() as http_session:
+                http_session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                
+                deleted_count = 0
+                for vehicle in vehicles_to_check:
+                    # 차량 상세정보 조회
+                    detail_info = get_encar_api_data(
+                        f"{DETAIL_API_URL}/{vehicle.carseq}?include=OPTIONS", 
+                        http_session
+                    )
+                    
+                    if not detail_info:
+                        try:
+                            # 삭제/판매된 차량은 DB에서 완전히 삭제 (데드락 방지를 위해 순서 변경)
+                            # 1. 먼저 VehicleOption 삭제
+                            session.query(VehicleOption).filter(VehicleOption.vehicle_id == vehicle.vehicleid).delete()
+                            # 2. 그 다음 Vehicle 삭제
+                            session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).delete()
+                            # 3. 즉시 커밋하여 데드락 방지
+                            session.commit()
+                            deleted_count += 1
+                            print(f"  [삭제] CarSeq: {vehicle.carseq}")
+                        except Exception as e:
+                            session.rollback()
+                            print(f"  [삭제 실패] CarSeq: {vehicle.carseq}, 오류: {e}")
+                            continue
+                
+                total_deleted += deleted_count
+                print(f"[배치 완료] {deleted_count}대 차량 삭제 (진행률: {offset + len(vehicles_to_check)}/{total_vehicles})")
+                
+                # 다음 배치를 위해 offset 증가
+                offset += batch_size
+    
+    print(f"[주기적 정리 완료] 총 {total_deleted}대 차량 삭제")
+
+def crawl_encar_weekly():
+    """주간 정리 함수 (주말용) - 정리만"""
+    print("[주간 정리 시작] - 삭제된 차량 정리 + 옵션 누락 차량 크롤링")
+    
+    # 1단계: 삭제된 차량 정리
+    print("\n" + "=" * 50)
+    print("1단계: 삭제된 차량 정리")
+    print("=" * 50)
+    cleanup_deleted_vehicles_weekly(batch_size=50)
+    
+    # 2단계: 옵션 누락 차량 크롤링
+    print("\n" + "=" * 50)
+    print("2단계: 옵션 누락 차량 크롤링")
+    print("=" * 50)
+    crawl_missing_options()
+    
+    print("\n[주간 정리 완료]")
+
+# =============================================================================
+# 옵션정보만 크롤링
+# =============================================================================
+def update_has_options_from_existing_data():
+    """기존 vehicle_options 테이블 데이터를 기반으로 has_options를 업데이트합니다."""
+    with session_scope() as session:
+        # vehicle_options 테이블에 데이터가 있는 차량들의 has_options를 True로 업데이트
+        vehicles_with_options = session.query(VehicleOption.vehicle_id).distinct().subquery()
+        
+        updated_count = session.query(Vehicle).filter(
+            Vehicle.platform == 'encar',
+            Vehicle.vehicleid.in_(session.query(vehicles_with_options.c.vehicle_id))
+        ).update({'has_options': True}, synchronize_session=False)
+        
+        print(f"[has_options 업데이트] {updated_count}대 차량을 True로 업데이트")
+
+def get_vehicles_without_options():
+    """옵션이 없는 차량들을 조회합니다."""
+    with session_scope() as session:
+        # has_options가 NULL인 차량들만 조회 (아직 옵션 확인을 하지 않은 차량)
+        vehicles_without_options = session.query(Vehicle).filter(
+            Vehicle.platform == 'encar',
+            Vehicle.has_options.is_(None)
+        ).all()
+        
+        # 디버깅: 전체 상태 확인
+        total_encar = session.query(Vehicle).filter(Vehicle.platform == 'encar').count()
+        null_options = session.query(Vehicle).filter(Vehicle.platform == 'encar', Vehicle.has_options.is_(None)).count()
+        false_options = session.query(Vehicle).filter(Vehicle.platform == 'encar', Vehicle.has_options == False).count()
+        true_options = session.query(Vehicle).filter(Vehicle.platform == 'encar', Vehicle.has_options == True).count()
+        
+        print(f"[디버깅] 엔카 차량 총 {total_encar}대:")
+        print(f"  - has_options = NULL: {null_options}대")
+        print(f"  - has_options = False: {false_options}대") 
+        print(f"  - has_options = True: {true_options}대")
+        print(f"[옵션 누락 차량] {len(vehicles_without_options)}대 발견")
+        
+        return vehicles_without_options
+
+def crawl_missing_options():
+    """옵션이 누락된 차량들의 옵션정보를 크롤링합니다."""
+    # 1단계: 기존 vehicle_options 테이블 데이터를 기반으로 has_options 업데이트
+    print("[1단계] 기존 옵션 데이터 기반 has_options 업데이트")
+    update_has_options_from_existing_data()
+    
+    # 2단계: has_options가 NULL인 차량들 조회
+    print("\n[2단계] 옵션 누락 차량 조회")
+    vehicles = get_vehicles_without_options()
+    if not vehicles:
+        print("[옵션 크롤링] 누락된 옵션이 없습니다.")
+        return
+    
+    with session_scope() as session:
+        with requests.Session() as http_session:
+            http_session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            
+            print(f"[옵션 크롤링 시작] {len(vehicles)}대 차량")
+            
+            for i, vehicle in enumerate(vehicles, 1):
+                # 100대마다 commit하여 메모리 효율성 확보
+                if i % 100 == 0:
+                    session.commit()
+                    print(f"  [진행상황] {i}/{len(vehicles)}대 처리 완료, DB 커밋")
+                print(f"  [{i}/{len(vehicles)}] CarSeq: {vehicle.carseq}")
+                
+                # 차량 상세정보 조회
+                detail_info = get_encar_api_data(
+                    f"{DETAIL_API_URL}/{vehicle.carseq}?include=OPTIONS", 
+                    http_session
+                )
+                
+                if not detail_info:
+                    print(f"    [삭제/판매된 차량] CarSeq: {vehicle.carseq} - DB에서 삭제")
+                    try:
+                        # 삭제/판매된 차량은 DB에서 완전히 삭제 (데드락 방지)
+                        # 1. 먼저 VehicleOption 삭제
+                        session.query(VehicleOption).filter(VehicleOption.vehicle_id == vehicle.vehicleid).delete()
+                        # 2. 그 다음 Vehicle 삭제
+                        session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).delete()
+                        # 3. 즉시 커밋
+                        session.commit()
+                    except Exception as e:
+                        session.rollback()
+                        print(f"    [삭제 실패] CarSeq: {vehicle.carseq}, 오류: {e}")
+                    continue
+                
+                # 옵션 데이터 추출
+                options_data = detail_info.get("options", {})
+                standard_options = options_data.get("standard", [])
+                
+                if not standard_options:
+                    print(f"    [옵션 없음] CarSeq: {vehicle.carseq}")
+                    # 옵션이 없는 차량은 has_options를 False로 설정
+                    session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': False})
+                    continue
+                
+                # 플랫폼 옵션을 글로벌 옵션으로 변환
+                global_options = convert_platform_options_to_global(standard_options, 'encar')
+                
+                if not global_options:
+                    print(f"    [변환된 옵션 없음] CarSeq: {vehicle.carseq}")
+                    continue
+                
+                # 옵션 마스터에서 옵션 ID 조회
+                option_masters = session.query(OptionMaster).filter(
+                    OptionMaster.option_code.in_(global_options)
+                ).all()
+                
+                option_master_map = {opt.option_code: opt.option_id for opt in option_masters}
+                
+                # VehicleOption 레코드 생성
+                vehicle_options = []
+                for global_code in global_options:
+                    if global_code in option_master_map:
+                        vehicle_options.append({
+                            'vehicle_id': vehicle.vehicleid,
+                            'option_id': option_master_map[global_code]
+                        })
+                
+                if vehicle_options:
+                    # 새 옵션만 추가
+                    try:
+                        session.bulk_insert_mappings(VehicleOption, vehicle_options)
+                        print(f"    [옵션 저장 완료] CarSeq: {vehicle.carseq}, 옵션 {len(vehicle_options)}개")
+                        # 옵션이 저장된 차량은 has_options를 True로 설정
+                        session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': True})
+                    except Exception as e:
+                        if "duplicate key" in str(e).lower():
+                            print(f"    [옵션 중복] CarSeq: {vehicle.carseq}, 이미 존재하는 옵션들")
+                            # 중복 옵션이 있는 차량은 has_options를 True로 설정
+                            session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': True})
+                        else:
+                            print(f"    [옵션 저장 실패] CarSeq: {vehicle.carseq}, 오류: {type(e).__name__}: {e}")
+                    
+
+                else:
+                    print(f"    [옵션 없음] CarSeq: {vehicle.carseq}")
+                    # 옵션이 없는 차량은 has_options를 False로 설정
+                    session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': False})
 
 # =============================================================================
 # 메인 실행
 # =============================================================================
 if __name__ == "__main__":
-    crawl_encar_with_options()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='엔카 크롤러')
+    parser.add_argument('--mode', choices=['daily', 'weekly'], default='daily',
+                       help='크롤링 모드: daily(일반 크롤링), weekly(정리만)')
+    parser.add_argument('--page-size', type=int, default=50,
+                       help='페이지 크기 (기본값: 50)')
+    
+    args = parser.parse_args()
+    
+    if args.mode == 'weekly':
+        print("주간 정리 모드 시작")
+        crawl_encar_weekly()
+    else:
+        print("일반 크롤링 모드 시작")
+        crawl_encar_daily(page_size=args.page_size)
+    
+    print("크롤링 완료")

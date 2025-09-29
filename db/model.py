@@ -61,6 +61,22 @@ class VehicleOption(Base):
         Index('idx_vehicle_option', 'vehicle_id', 'option_id'),
     )
 
+#보험 이력
+# class VehicleHistory(Base):
+#     __tablename__ = 'vehicle_histories'
+
+#     vehicle_id = Column(Integer, ForeignKey('vehicles.vehicleid'), primary_key=True)
+    
+#     owner_change_count = Column(Integer, nullable=True)     # 소유자 변경 횟수
+#     my_accident_count = Column(Integer, nullable=True)      # 내차 피해 횟수
+#     other_accident_count = Column(Integer, nullable=True)   # 타차 가해 횟수
+#     total_loss_count = Column(Integer, nullable=True)       # 전손 이력 횟수
+#     flood_total_loss_count = Column(Integer, nullable=True) # 침수 전손 이력 횟수
+#     loan_status = Column(Integer, nullable=True)            # 저당 설정 유무
+    
+#     # Vehicle 테이블과의 관계 설정 (역참조)
+#     vehicle = relationship("Vehicle", back_populates="history")
+
 # =============================================================================
 # DB 관리 함수들
 # =============================================================================
