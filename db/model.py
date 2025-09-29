@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint, Text, Boolean
+from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint, Text, Boolean, DateTime, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from .connection import session_scope, Engine
 
@@ -61,21 +61,49 @@ class VehicleOption(Base):
         Index('idx_vehicle_option', 'vehicle_id', 'option_id'),
     )
 
-#보험 이력
-# class VehicleHistory(Base):
-#     __tablename__ = 'vehicle_histories'
-
-#     vehicle_id = Column(Integer, ForeignKey('vehicles.vehicleid'), primary_key=True)
+# 보험 이력 (일반화된 구조)
+class InsuranceHistory(Base):
+    __tablename__ = 'insurance_history'
     
-#     owner_change_count = Column(Integer, nullable=True)     # 소유자 변경 횟수
-#     my_accident_count = Column(Integer, nullable=True)      # 내차 피해 횟수
-#     other_accident_count = Column(Integer, nullable=True)   # 타차 가해 횟수
-#     total_loss_count = Column(Integer, nullable=True)       # 전손 이력 횟수
-#     flood_total_loss_count = Column(Integer, nullable=True) # 침수 전손 이력 횟수
-#     loan_status = Column(Integer, nullable=True)            # 저당 설정 유무
+    insurance_id = Column(Integer, primary_key=True, autoincrement=True)
+    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicleid'), nullable=False)
+    platform = Column(String, nullable=False)  # 'encar' 또는 'chacha'
     
-#     # Vehicle 테이블과의 관계 설정 (역참조)
-#     vehicle = relationship("Vehicle", back_populates="history")
+    
+    # 사고 이력 요약
+    my_accident_cnt = Column(Integer, default=0)  # 내차 피해 횟수
+    other_accident_cnt = Column(Integer, default=0)  # 상대차 피해 횟수
+    my_accident_cost = Column(Integer, default=0)  # 내차 피해 금액
+    other_accident_cost = Column(Integer, default=0)  # 상대차 피해 금액
+    total_accident_cnt = Column(Integer, default=0)  # 총 사고 횟수
+    
+    # 특수 사고 이력
+    total_loss_cnt = Column(Integer, default=0)  # 전손 횟수
+    total_loss_date = Column(String)  # 전손일
+    robber_cnt = Column(Integer, default=0)  # 도난 횟수
+    robber_date = Column(String)  # 도난일
+    flood_total_loss_cnt = Column(Integer, default=0)  # 침수 전손 횟수
+    flood_part_loss_cnt = Column(Integer, default=0)  # 침수 부분손 횟수
+    flood_date = Column(String)  # 침수일
+    
+    # 기타 이력
+    owner_change_cnt = Column(Integer, default=0)  # 소유자 변경 횟수
+    car_no_change_cnt = Column(Integer, default=0)  # 차량번호 변경 횟수
+    
+    # 특수 용도 이력 (0: 없음, 1: 있음)
+    government = Column(Integer, default=0)  # 관용용도
+    business = Column(Integer, default=0)  # 영업용도
+    rental = Column(Integer, default=0)  # 대여용도(렌터카)
+    loan = Column(Integer, default=0)  # 대출/저당
+    
+    # 미가입 기간 (쉼표로 구분된 문자열)
+    not_join_periods = Column(String)  # 미가입 기간들 (예: "202106~202505, 202301~202303")
+    
+    __table_args__ = (
+        Index('idx_insurance_history_vehicle_id', 'vehicle_id'),
+        Index('idx_insurance_history_platform', 'platform'),
+        UniqueConstraint('vehicle_id', 'platform', name='uq_insurance_history_vehicle_platform'),
+    )
 
 # =============================================================================
 # DB 관리 함수들
@@ -107,10 +135,15 @@ def check_database_status():
             vehicle_option_count = session.query(VehicleOption).count()
             print(f"[DB 상태] VehicleOption 테이블: {vehicle_option_count:,}건")
             
+            # InsuranceHistory 테이블 확인
+            insurance_history_count = session.query(InsuranceHistory).count()
+            print(f"[DB 상태] InsuranceHistory 테이블: {insurance_history_count:,}건")
+            
             return {
                 'vehicle_count': vehicle_count,
                 'option_master_count': option_master_count,
-                'vehicle_option_count': vehicle_option_count
+                'vehicle_option_count': vehicle_option_count,
+                'insurance_history_count': insurance_history_count
             }
     except Exception as e:
         print(f"[DB 상태 확인 실패] {e}")
