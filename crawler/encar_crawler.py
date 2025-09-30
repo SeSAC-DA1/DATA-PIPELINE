@@ -10,8 +10,9 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.connection import session_scope
-from db.model import Vehicle, OptionMaster, VehicleOption, InsuranceHistory, create_tables_if_not_exist, check_database_status
+from db.model import Vehicle, OptionMaster, VehicleOption, InsuranceHistory, Inspection, InspectionDetail, create_tables_if_not_exist, check_database_status
 from crawler.option_mapping import initialize_global_options, convert_platform_options_to_global
+from crawler.inspection_mapping import normalize_status, normalize_rank, normalize_damage_types
 
 # =============================================================================
 # 상수 및 설정
@@ -238,6 +239,251 @@ def convert_to_insurance_record(record_info: Dict, vehicle_id: int) -> Optional[
     except (KeyError, TypeError):
         return None
 
+def convert_to_inspection_record(inspection_data: Dict, vehicle_id: int) -> Optional[Dict]:
+    """엔카 검사 API 응답을 Inspection/Item/Panel 레코드로 변환"""
+    try:
+        master = inspection_data.get("master", {})
+        detail = master.get("detail", {})
+        
+        # 1) Inspection 요약
+        inspection = {
+            "vehicle_id": vehicle_id,
+            "platform": "encar",
+            "accident_history": master.get("accdient"),  # API 오타 필드명
+            "simple_repair": master.get("simpleRepair"),
+            "waterlog": detail.get("waterlog"),
+            "fire_history": None,
+            "recall_target": detail.get("recall"),
+            "tuning_illegal": detail.get("tuning"),
+            "outer_1": 0,
+            "outer_2": 0,
+            "struct_a": 0,
+            "struct_b": 0,
+            "struct_c": 0,
+            "images": None
+        }
+        
+        # 2) InspectionItem 파싱
+        items = _parse_inspection_items(inspection_data.get('inners', []), vehicle_id)
+        
+        # 3) InspectionPanel 파싱
+        panels = _parse_inspection_panels(inspection_data.get('outers', []), vehicle_id)
+        
+        # 외판/골격 카운트 계산
+        for panel in panels:
+            rank = panel['rank']
+            if rank == '1': inspection['outer_1'] += 1
+            elif rank == '2': inspection['outer_2'] += 1
+            elif rank == 'A': inspection['struct_a'] += 1
+            elif rank == 'B': inspection['struct_b'] += 1
+            elif rank == 'C': inspection['struct_c'] += 1
+        
+        # 이미지 처리
+        images = inspection_data.get('images', [])
+        if images:
+            image_urls = [img.get('path', '') for img in images if img.get('path')]
+            inspection['images'] = ','.join(image_urls[:10])  # 최대 10개
+        
+        return {
+            "inspection": inspection,
+            "items": items,
+            "panels": panels
+        }
+    except Exception as e:
+        print(f"  [검사 데이터 변환 오류] {e}")
+        return None
+
+def _parse_inspection_items(inners_data: List[Dict], vehicle_id: int) -> List[Dict]:
+    """inners 데이터에서 검사 항목 추출"""
+    items = []
+    
+    def extract_items(children, group_name):
+        for child in children:
+            child_type = child.get('type', {})
+            status_type = child.get('statusType', {})
+            
+            item_name = child_type.get('title', '')
+            status_code = status_type.get('code', '')
+            status_text = status_type.get('title', '')
+            
+            # 상태가 있는 항목만 저장
+            if status_code and item_name:
+                # 양호 여부 판단 (코드 1=양호, 그 외=불량/문제)
+                is_good = (status_code == '1')
+                
+                items.append({
+                    "vehicle_id": vehicle_id,
+                    "group_name": group_name,
+                    "item_name": item_name,
+                    "status_code": status_code,
+                    "status_text": status_text,
+                    "is_good": is_good
+                })
+            
+            # 재귀 처리
+            if child.get('children'):
+                extract_items(child['children'], group_name)
+    
+    for inner in inners_data:
+        inner_type = inner.get('type', {})
+        group_name = inner_type.get('title', '기타')
+        
+        if inner.get('children'):
+            extract_items(inner['children'], group_name)
+    
+    return items
+
+def _parse_inspection_panels(outers_data: List[Dict], vehicle_id: int) -> List[Dict]:
+    """outers 데이터에서 외판/골격 손상 추출"""
+    panels = []
+    
+    for outer in outers_data:
+        outer_type = outer.get('type', {})
+        part_code = outer_type.get('code', '')
+        part_title = outer_type.get('title', '')
+        
+        # 랭크 추출 및 변환
+        attributes = outer.get('attributes', [])
+        rank = None
+        if 'RANK_ONE' in attributes: 
+            rank = 'OUTER_1'
+        elif 'RANK_TWO' in attributes: 
+            rank = 'OUTER_2'
+        elif 'RANK_A' in attributes: 
+            rank = 'STRUCT_A'
+        elif 'RANK_B' in attributes: 
+            rank = 'STRUCT_B'
+        elif 'RANK_C' in attributes: 
+            rank = 'STRUCT_C'
+        
+        # 손상 유형 추출
+        status_types = outer.get('statusTypes', [])
+        exchanged = False
+        welded = False
+        scratched = False
+        uneven = False
+        corroded = False
+        damaged = False
+        
+        for st in status_types:
+            code = st.get('code', '')
+            if code == 'X': exchanged = True
+            elif code == 'W': welded = True
+            elif code == 'A': scratched = True
+            elif code == 'U': uneven = True
+            elif code == 'C': corroded = True
+            elif code == 'T': damaged = True
+        
+        # 손상이 있는 부위만 저장
+        if rank and (exchanged or welded or scratched or uneven or corroded or damaged):
+            panels.append({
+                "vehicle_id": vehicle_id,
+                "part_code": part_code,
+                "part_title": part_title,
+                "rank": rank,
+                "exchanged": exchanged,
+                "welded": welded,
+                "scratched": scratched,
+                "uneven": uneven,
+                "corroded": corroded,
+                "damaged": damaged
+            })
+    
+    return panels
+
+def save_inspection_to_db(inspection_records: List[Dict]):
+    """검사 이력을 DB에 저장 (Inspection + Items + Panels)"""
+    if not inspection_records:
+        print(f"  [검사 이력 저장] 저장할 레코드가 없음")
+        return 0
+    
+    try:
+        with session_scope() as session:
+            saved_count = 0
+            
+            for record in inspection_records:
+                vehicle_id = record['inspection']['vehicle_id']
+                
+                # 기존 검사 이력 확인
+                existing = session.query(Inspection).filter(
+                    Inspection.vehicle_id == vehicle_id,
+                    Inspection.platform == 'encar'
+                ).first()
+                
+                if existing:
+                    # 기존 데이터 삭제 (관련 items, panels도 cascade로 삭제됨)
+                    session.delete(existing)
+                    session.flush()
+                
+                # 1) Inspection 저장
+                inspection_obj = Inspection(**record['inspection'])
+                session.add(inspection_obj)
+                session.flush()
+                
+                # 2) InspectionItem 저장
+                if record['items']:
+                    for item_data in record['items']:
+                        session.add(InspectionItem(**item_data))
+                
+                # 3) InspectionPanel 저장
+                if record['panels']:
+                    for panel_data in record['panels']:
+                        session.add(InspectionPanel(**panel_data))
+                
+                saved_count += 1
+            
+            print(f"  [검사 이력 저장] {saved_count}건 저장 완료")
+            print(f"  [검사 항목] {sum(len(r['items']) for r in inspection_records)}개 항목 저장")
+            print(f"  [외판/골격] {sum(len(r['panels']) for r in inspection_records)}개 부위 저장")
+            
+            return saved_count
+    except Exception as e:
+        print(f"  [검사 이력 저장 오류] {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
+
+def _old_save_inspection_to_db(inspection_records: List[Dict]):
+    """[LEGACY] 이전 방식의 검사 이력 저장 함수"""
+    if not inspection_records:
+        print(f"  [검사 이력 저장] 저장할 레코드가 없음")
+        return 0
+    
+    try:
+        with session_scope() as session:
+            # 기존 레코드들을 한 번에 조회
+            vehicle_ids = [rec['vehicle_id'] for rec in inspection_records]
+            print(f"  [검사 이력 저장] 기존 레코드 확인 중... (vehicle_ids: {len(vehicle_ids)}개)")
+            
+            existing_records = session.query(Inspection).filter(
+                Inspection.vehicle_id.in_(vehicle_ids),
+                Inspection.platform == 'encar'
+            ).all()
+            
+            existing_keys = {(r.vehicle_id, r.platform) for r in existing_records}
+            print(f"  [검사 이력 저장] 기존 레코드: {len(existing_keys)}건")
+            
+            # 신규 레코드만 필터링
+            new_records = []
+            for record in inspection_records:
+                key = (record['vehicle_id'], record['platform'])
+                if key not in existing_keys:
+                    new_records.append(Inspection(**record))
+            
+            print(f"  [검사 이력 저장] 신규 레코드: {len(new_records)}건")
+            
+            # 신규 레코드만 배치 삽입
+            if new_records:
+                session.bulk_save_objects(new_records)
+                print(f"  [검사 이력 저장] {len(new_records)}건 신규 저장 완료")
+            else:
+                print(f"  [검사 이력 저장] 모든 레코드가 이미 존재함")
+            
+            return len(new_records)
+    except Exception as e:
+        print(f"  [검사 이력 저장 오류] {e}")
+        return 0
+
 def save_data_to_db(records: List[Dict]):
     if not records: 
         return 0
@@ -257,7 +503,7 @@ def save_data_to_db(records: List[Dict]):
             session.bulk_insert_mappings(Vehicle, vehicle_mappings)
             
             # 저장된 차량 ID 매핑
-            vehicle_map = {v.carseq: v.vehicleid for v in session.query(Vehicle.vehicleid, Vehicle.carseq).filter(Vehicle.carseq.in_([rec['carseq'] for rec in records]))}
+            vehicle_map = {v.car_seq: v.vehicle_id for v in session.query(Vehicle.vehicle_id, Vehicle.car_seq).filter(Vehicle.car_seq.in_([rec['carseq'] for rec in records]))}
             
             print(f"  [차량 저장] {len(records)}대 저장 완료")
             
@@ -325,6 +571,47 @@ def save_insurance_to_db(insurance_records: List[Dict]):
             return len(new_records)
     except Exception as e:
         print(f"  [보험 이력 저장 오류] {e}")
+        return 0
+
+def save_inspection_to_db(inspection_records: List[Dict]):
+    """검사 이력을 DB에 저장 (기존 있으면 스킵, 없으면 삽입)"""
+    if not inspection_records:
+        print(f"  [검사 이력 저장] 저장할 레코드가 없음")
+        return 0
+    
+    try:
+        with session_scope() as session:
+            # 기존 레코드들을 한 번에 조회
+            vehicle_ids = [rec['vehicle_id'] for rec in inspection_records]
+            print(f"  [검사 이력 저장] 기존 레코드 확인 중... (vehicle_ids: {len(vehicle_ids)}개)")
+            
+            existing_records = session.query(Inspection).filter(
+                Inspection.vehicle_id.in_(vehicle_ids),
+                Inspection.platform == 'encar'
+            ).all()
+            
+            existing_keys = {(r.vehicle_id, r.platform) for r in existing_records}
+            print(f"  [검사 이력 저장] 기존 레코드: {len(existing_keys)}건")
+            
+            # 신규 레코드만 필터링
+            new_records = []
+            for record in inspection_records:
+                key = (record['vehicle_id'], record['platform'])
+                if key not in existing_keys:
+                    new_records.append(Inspection(**record))
+            
+            print(f"  [검사 이력 저장] 신규 레코드: {len(new_records)}건")
+            
+            # 신규 레코드만 배치 삽입
+            if new_records:
+                session.bulk_save_objects(new_records)
+                print(f"  [검사 이력 저장] {len(new_records)}건 신규 저장 완료")
+            else:
+                print(f"  [검사 이력 저장] 모든 레코드가 이미 존재함")
+            
+            return len(new_records)
+    except Exception as e:
+        print(f"  [검사 이력 저장 오류] {e}")
         return 0
 
 # =============================================================================
@@ -396,38 +683,56 @@ def crawl_encar_model(brand: str, model: str, session: requests.Session, existin
             
             # 저장 성공한 경우에만 기존 데이터에 추가
             if saved_count > 0:
-                # 보험 이력 저장 (배치 처리)
+                # 보험 이력 및 검사 이력 저장 (배치 처리)
                 car_seqs = [rec['carseq'] for rec in final_records if rec.get('record_info')]
-                print(f"  [보험 이력 처리] record_info가 있는 차량: {len(car_seqs)}대")
+                print(f"  [보험/검사 이력 처리] record_info가 있는 차량: {len(car_seqs)}대")
                 
                 if car_seqs:
                     with session_scope() as db_session:
                         # 한 번에 모든 Vehicle ID 조회
-                        vehicles = db_session.query(Vehicle).filter(Vehicle.carseq.in_(car_seqs)).all()
-                        vehicle_map = {v.carseq: v.vehicleid for v in vehicles}
-                        print(f"  [보험 이력 처리] Vehicle ID 조회 완료: {len(vehicle_map)}대")
+                        vehicles = db_session.query(Vehicle).filter(Vehicle.car_seq.in_(car_seqs)).all()
+                        vehicle_map = {v.car_seq: v.vehicle_id for v in vehicles}
+                        print(f"  [보험/검사 이력 처리] Vehicle ID 조회 완료: {len(vehicle_map)}대")
                         
                         # 보험 이력 변환
                         insurance_records = []
+                        inspection_records = []
+                        
                         for rec in final_records:
                             if rec.get('record_info') and rec['carseq'] in vehicle_map:
-                                insurance_record = convert_to_insurance_record(rec['record_info'], vehicle_map[rec['carseq']])
+                                vehicle_id = vehicle_map[rec['carseq']]
+                                
+                                # 보험 이력 변환
+                                insurance_record = convert_to_insurance_record(rec['record_info'], vehicle_id)
                                 if insurance_record:
                                     insurance_records.append(insurance_record)
+                                
+                                # 검사 데이터가 있는 경우 검사 이력 변환
+                                inspection_data = rec['record_info'].get('inspectionData')
+                                if inspection_data:
+                                    inspection_record = convert_to_inspection_record(inspection_data, vehicle_id)
+                                    if inspection_record:
+                                        inspection_records.append(inspection_record)
                         
                         print(f"  [보험 이력 처리] 변환된 보험 이력: {len(insurance_records)}건")
                         if insurance_records:
                             save_insurance_to_db(insurance_records)
                         else:
                             print(f"  [보험 이력 처리] 저장할 보험 이력이 없음")
+                        
+                        print(f"  [검사 이력 처리] 변환된 검사 이력: {len(inspection_records)}건")
+                        if inspection_records:
+                            save_inspection_to_db(inspection_records)
+                        else:
+                            print(f"  [검사 이력 처리] 저장할 검사 이력이 없음")
                 else:
-                    print(f"  [보험 이력 처리] record_info가 있는 차량이 없음")
-                
-                # 저장 성공한 레코드만 기존 데이터에 추가
-                for rec in final_records:
-                    existing_data['car_seqs'].add(str(rec['carseq']))
-                    if rec['vehicleno']:
-                        existing_data['vehicle_nos'].add(rec['vehicleno'])
+                    print(f"  [보험/검사 이력 처리] record_info가 있는 차량이 없음")
+            
+            # 저장 성공한 레코드만 기존 데이터에 추가
+            for rec in final_records:
+                existing_data['car_seqs'].add(str(rec['carseq']))
+                if rec['vehicleno']:
+                    existing_data['vehicle_nos'].add(rec['vehicleno'])
         
         _sleep_with_jitter(1.0, 0.5)
         
@@ -446,8 +751,8 @@ def crawl_encar_daily(max_pages_per_modelgroup: int = 1000, page_size: int = 50)
     
     # 기존 데이터 조회 (한 번만)
     with session_scope() as db_session:
-        existing_car_seqs = {str(r[0]) for r in db_session.query(Vehicle.carseq).filter(Vehicle.platform == 'encar').all() if r[0]}
-        existing_vehicle_nos = {r[0] for r in db_session.query(Vehicle.vehicleno).filter(Vehicle.vehicleno.isnot(None)).all()}
+        existing_car_seqs = {str(r[0]) for r in db_session.query(Vehicle.car_seq).filter(Vehicle.platform == 'encar').all() if r[0]}
+        existing_vehicle_nos = {r[0] for r in db_session.query(Vehicle.vehicle_no).filter(Vehicle.vehicle_no.isnot(None)).all()}
     
     existing_data = {
         'car_seqs': existing_car_seqs, 
@@ -518,7 +823,7 @@ def cleanup_deleted_vehicles_weekly(batch_size: int = 50):
                 for vehicle in vehicles_to_check:
                     # 차량 상세정보 조회
                     detail_info = get_encar_api_data(
-                        f"{DETAIL_API_URL}/{vehicle.carseq}?include=OPTIONS", 
+                        f"{DETAIL_API_URL}/{vehicle.car_seq}?include=OPTIONS", 
                         http_session
                     )
                     
@@ -526,18 +831,20 @@ def cleanup_deleted_vehicles_weekly(batch_size: int = 50):
                         try:
                             # 삭제/판매된 차량은 DB에서 완전히 삭제 (데드락 방지를 위해 순서 변경)
                             # 1. 먼저 VehicleOption 삭제
-                            session.query(VehicleOption).filter(VehicleOption.vehicle_id == vehicle.vehicleid).delete()
+                            session.query(VehicleOption).filter(VehicleOption.vehicle_id == vehicle.vehicle_id).delete()
                             # 2. 그 다음 InsuranceHistory 삭제
-                            session.query(InsuranceHistory).filter(InsuranceHistory.vehicle_id == vehicle.vehicleid).delete()
-                            # 3. 그 다음 Vehicle 삭제
-                            session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).delete()
-                            # 4. 즉시 커밋하여 데드락 방지
+                            session.query(InsuranceHistory).filter(InsuranceHistory.vehicle_id == vehicle.vehicle_id).delete()
+                            # 3. 그 다음 Inspection 삭제
+                            session.query(Inspection).filter(Inspection.vehicle_id == vehicle.vehicle_id).delete()
+                            # 4. 그 다음 Vehicle 삭제
+                            session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle.vehicle_id).delete()
+                            # 5. 즉시 커밋하여 데드락 방지
                             session.commit()
                             deleted_count += 1
-                            print(f"  [삭제] CarSeq: {vehicle.carseq}")
+                            print(f"  [삭제] CarSeq: {vehicle.car_seq}")
                         except Exception as e:
                             session.rollback()
-                            print(f"  [삭제 실패] CarSeq: {vehicle.carseq}, 오류: {e}")
+                            print(f"  [삭제 실패] CarSeq: {vehicle.car_seq}, 오류: {e}")
                             continue
                 
                 total_deleted += deleted_count
@@ -550,7 +857,7 @@ def cleanup_deleted_vehicles_weekly(batch_size: int = 50):
 
 def crawl_encar_weekly():
     """주간 정리 함수 (주말용) - 정리만"""
-    print("[주간 정리 시작] - 삭제된 차량 정리 + 옵션 누락 차량 크롤링 + 보험 이력 누락 차량 크롤링")
+    print("[주간 정리 시작] - 삭제된 차량 정리 + 옵션 누락 차량 크롤링 + 보험 이력 누락 차량 크롤링 + 검사 이력 누락 차량 크롤링")
     
     # 1단계: 삭제된 차량 정리
     print("\n" + "=" * 50)
@@ -570,6 +877,12 @@ def crawl_encar_weekly():
     print("=" * 50)
     crawl_missing_insurance()
     
+    # 4단계: 검사 이력 누락 차량 크롤링
+    print("\n" + "=" * 50)
+    print("4단계: 검사 이력 누락 차량 크롤링")
+    print("=" * 50)
+    crawl_missing_inspection()
+    
     print("\n[주간 정리 완료]")
 
 # =============================================================================
@@ -583,7 +896,7 @@ def update_has_options_from_existing_data():
         
         updated_count = session.query(Vehicle).filter(
             Vehicle.platform == 'encar',
-            Vehicle.vehicleid.in_(session.query(vehicles_with_options.c.vehicle_id))
+            Vehicle.vehicle_id.in_(session.query(vehicles_with_options.c.vehicle_id))
         ).update({'has_options': True}, synchronize_session=False)
         
         print(f"[has_options 업데이트] {updated_count}대 차량을 True로 업데이트")
@@ -616,11 +929,24 @@ def get_vehicles_without_insurance():
     with session_scope() as session:
         # 보험 이력이 없는 엔카 차량들 조회
         vehicles = session.query(Vehicle).outerjoin(InsuranceHistory, 
-            (Vehicle.vehicleid == InsuranceHistory.vehicle_id) & 
+            (Vehicle.vehicle_id == InsuranceHistory.vehicle_id) & 
             (InsuranceHistory.platform == 'encar')
         ).filter(
             Vehicle.platform == 'encar',
             InsuranceHistory.vehicle_id.is_(None)
+        ).all()
+        return vehicles
+
+def get_vehicles_without_inspection():
+    """검사 이력이 누락된 차량들을 조회합니다."""
+    with session_scope() as session:
+        # 검사 이력이 없는 엔카 차량들 조회
+        vehicles = session.query(Vehicle).outerjoin(Inspection, 
+            (Vehicle.vehicle_id == Inspection.vehicle_id) & 
+            (Inspection.platform == 'encar')
+        ).filter(
+            Vehicle.platform == 'encar',
+            Inspection.vehicle_id.is_(None)
         ).all()
         return vehicles
 
@@ -647,19 +973,19 @@ def crawl_missing_insurance():
                 if i % 100 == 0:
                     session.commit()
                     print(f"  [진행상황] {i}/{len(vehicles)}대 처리 완료, DB 커밋")
-                print(f"  [{i}/{len(vehicles)}] CarSeq: {vehicle.carseq}")
+                print(f"  [{i}/{len(vehicles)}] CarSeq: {vehicle.car_seq}")
                 
                 # record_info API 시도
                 record_info = get_encar_api_data(
-                    f"{RECORD_API_URL}/{vehicle.carseq}/open", 
+                    f"{RECORD_API_URL}/{vehicle.car_seq}/open", 
                     http_session, 
-                    params={"vehicleNo": vehicle.vehicleno}
+                    params={"vehicleNo": vehicle.vehicle_no}
                 )
                 
                 if not record_info:
                     # record_info가 없으면 차량검사 API 시도
                     inspection_info = get_encar_api_data(
-                        f"{INSPECTION_API_URL}/{vehicle.carseq}", 
+                        f"{INSPECTION_API_URL}/{vehicle.car_seq}", 
                         http_session
                     )
                     if inspection_info:
@@ -668,28 +994,83 @@ def crawl_missing_insurance():
                             "inspectionData": inspection_info
                         }
                     else:
-                        print(f"    [보험 이력 없음] CarSeq: {vehicle.carseq}")
+                        print(f"    [보험 이력 없음] CarSeq: {vehicle.car_seq}")
                         continue
                 
                 # 보험 이력 변환
-                insurance_record = convert_to_insurance_record(record_info, vehicle.vehicleid)
+                insurance_record = convert_to_insurance_record(record_info, vehicle.vehicle_id)
                 if insurance_record:
                     # 기존 레코드가 있는지 확인
                     existing = session.query(InsuranceHistory).filter(
-                        InsuranceHistory.vehicle_id == vehicle.vehicleid,
+                        InsuranceHistory.vehicle_id == vehicle.vehicle_id,
                         InsuranceHistory.platform == 'encar'
                     ).first()
                     
                     if not existing:
                         # 신규 레코드 삽입
                         session.add(InsuranceHistory(**insurance_record))
-                        print(f"    [보험 이력 저장 완료] CarSeq: {vehicle.carseq}")
+                        print(f"    [보험 이력 저장 완료] CarSeq: {vehicle.car_seq}")
                     else:
-                        print(f"    [보험 이력 이미 존재] CarSeq: {vehicle.carseq}")
+                        print(f"    [보험 이력 이미 존재] CarSeq: {vehicle.car_seq}")
                 else:
-                    print(f"    [보험 이력 변환 실패] CarSeq: {vehicle.carseq}")
+                    print(f"    [보험 이력 변환 실패] CarSeq: {vehicle.car_seq}")
     
     print(f"[보험 이력 크롤링 완료] {len(vehicles)}대 차량 처리")
+
+def crawl_missing_inspection():
+    """검사 이력이 누락된 차량들의 검사 이력을 크롤링합니다."""
+    print("[검사 이력 크롤링 시작] - 누락된 검사 이력 수집")
+    
+    # 검사 이력이 누락된 차량들 조회
+    vehicles = get_vehicles_without_inspection()
+    if not vehicles:
+        print("[검사 이력 크롤링] 누락된 검사 이력이 없습니다.")
+        return
+    
+    with session_scope() as session:
+        with requests.Session() as http_session:
+            http_session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            
+            print(f"[검사 이력 크롤링 시작] {len(vehicles)}대 차량")
+            
+            for i, vehicle in enumerate(vehicles, 1):
+                # 100대마다 commit하여 메모리 효율성 확보
+                if i % 100 == 0:
+                    session.commit()
+                    print(f"  [진행상황] {i}/{len(vehicles)}대 처리 완료, DB 커밋")
+                print(f"  [{i}/{len(vehicles)}] CarSeq: {vehicle.car_seq}")
+                
+                # 검사 API 호출
+                inspection_info = get_encar_api_data(
+                    f"{INSPECTION_API_URL}/{vehicle.car_seq}", 
+                    http_session
+                )
+                
+                if not inspection_info:
+                    print(f"    [검사 이력 없음] CarSeq: {vehicle.car_seq}")
+                    continue
+                
+                # 검사 이력 변환
+                inspection_record = convert_to_inspection_record(inspection_info, vehicle.vehicle_id)
+                if inspection_record:
+                    # 기존 레코드가 있는지 확인
+                    existing = session.query(Inspection).filter(
+                        Inspection.vehicle_id == vehicle.vehicle_id,
+                        Inspection.platform == 'encar'
+                    ).first()
+                    
+                    if not existing:
+                        # 신규 레코드 삽입
+                        session.add(Inspection(**inspection_record))
+                        print(f"    [검사 이력 저장 완료] CarSeq: {vehicle.car_seq}")
+                    else:
+                        print(f"    [검사 이력 이미 존재] CarSeq: {vehicle.car_seq}")
+                else:
+                    print(f"    [검사 이력 변환 실패] CarSeq: {vehicle.car_seq}")
+    
+    print(f"[검사 이력 크롤링 완료] {len(vehicles)}대 차량 처리")
 
 def crawl_missing_options():
     """옵션이 누락된 차량들의 옵션정보를 크롤링합니다."""
@@ -717,29 +1098,31 @@ def crawl_missing_options():
                 if i % 100 == 0:
                     session.commit()
                     print(f"  [진행상황] {i}/{len(vehicles)}대 처리 완료, DB 커밋")
-                print(f"  [{i}/{len(vehicles)}] CarSeq: {vehicle.carseq}")
+                print(f"  [{i}/{len(vehicles)}] CarSeq: {vehicle.car_seq}")
                 
                 # 차량 상세정보 조회
                 detail_info = get_encar_api_data(
-                    f"{DETAIL_API_URL}/{vehicle.carseq}?include=OPTIONS", 
+                    f"{DETAIL_API_URL}/{vehicle.car_seq}?include=OPTIONS", 
                     http_session
                 )
                 
                 if not detail_info:
-                    print(f"    [삭제/판매된 차량] CarSeq: {vehicle.carseq} - DB에서 삭제")
+                    print(f"    [삭제/판매된 차량] CarSeq: {vehicle.car_seq} - DB에서 삭제")
                     try:
                         # 삭제/판매된 차량은 DB에서 완전히 삭제 (데드락 방지)
                         # 1. 먼저 VehicleOption 삭제
-                        session.query(VehicleOption).filter(VehicleOption.vehicle_id == vehicle.vehicleid).delete()
+                        session.query(VehicleOption).filter(VehicleOption.vehicle_id == vehicle.vehicle_id).delete()
                         # 2. 그 다음 InsuranceHistory 삭제
-                        session.query(InsuranceHistory).filter(InsuranceHistory.vehicle_id == vehicle.vehicleid).delete()
-                        # 3. 그 다음 Vehicle 삭제
-                        session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).delete()
-                        # 4. 즉시 커밋
+                        session.query(InsuranceHistory).filter(InsuranceHistory.vehicle_id == vehicle.vehicle_id).delete()
+                        # 3. 그 다음 Inspection 삭제
+                        session.query(Inspection).filter(Inspection.vehicle_id == vehicle.vehicle_id).delete()
+                        # 4. 그 다음 Vehicle 삭제
+                        session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle.vehicle_id).delete()
+                        # 5. 즉시 커밋
                         session.commit()
                     except Exception as e:
                         session.rollback()
-                        print(f"    [삭제 실패] CarSeq: {vehicle.carseq}, 오류: {e}")
+                        print(f"    [삭제 실패] CarSeq: {vehicle.car_seq}, 오류: {e}")
                     continue
                 
                 # 옵션 데이터 추출
@@ -747,16 +1130,16 @@ def crawl_missing_options():
                 standard_options = options_data.get("standard", [])
                 
                 if not standard_options:
-                    print(f"    [옵션 없음] CarSeq: {vehicle.carseq}")
+                    print(f"    [옵션 없음] CarSeq: {vehicle.car_seq}")
                     # 옵션이 없는 차량은 has_options를 False로 설정
-                    session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': False})
+                    session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle.vehicle_id).update({'has_options': False})
                     continue
                 
                 # 플랫폼 옵션을 글로벌 옵션으로 변환
                 global_options = convert_platform_options_to_global(standard_options, 'encar')
                 
                 if not global_options:
-                    print(f"    [변환된 옵션 없음] CarSeq: {vehicle.carseq}")
+                    print(f"    [변환된 옵션 없음] CarSeq: {vehicle.car_seq}")
                     continue
                 
                 # 옵션 마스터에서 옵션 ID 조회
@@ -771,7 +1154,7 @@ def crawl_missing_options():
                 for global_code in global_options:
                     if global_code in option_master_map:
                         vehicle_options.append({
-                            'vehicle_id': vehicle.vehicleid,
+                            'vehicle_id': vehicle.vehicle_id,
                             'option_id': option_master_map[global_code]
                         })
                 
@@ -779,22 +1162,22 @@ def crawl_missing_options():
                     # 새 옵션만 추가
                     try:
                         session.bulk_insert_mappings(VehicleOption, vehicle_options)
-                        print(f"    [옵션 저장 완료] CarSeq: {vehicle.carseq}, 옵션 {len(vehicle_options)}개")
+                        print(f"    [옵션 저장 완료] CarSeq: {vehicle.car_seq}, 옵션 {len(vehicle_options)}개")
                         # 옵션이 저장된 차량은 has_options를 True로 설정
-                        session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': True})
+                        session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle.vehicle_id).update({'has_options': True})
                     except Exception as e:
                         if "duplicate key" in str(e).lower():
-                            print(f"    [옵션 중복] CarSeq: {vehicle.carseq}, 이미 존재하는 옵션들")
+                            print(f"    [옵션 중복] CarSeq: {vehicle.car_seq}, 이미 존재하는 옵션들")
                             # 중복 옵션이 있는 차량은 has_options를 True로 설정
-                            session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': True})
+                            session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle.vehicle_id).update({'has_options': True})
                         else:
-                            print(f"    [옵션 저장 실패] CarSeq: {vehicle.carseq}, 오류: {type(e).__name__}: {e}")
+                            print(f"    [옵션 저장 실패] CarSeq: {vehicle.car_seq}, 오류: {type(e).__name__}: {e}")
                     
 
                 else:
-                    print(f"    [옵션 없음] CarSeq: {vehicle.carseq}")
+                    print(f"    [옵션 없음] CarSeq: {vehicle.car_seq}")
                     # 옵션이 없는 차량은 has_options를 False로 설정
-                    session.query(Vehicle).filter(Vehicle.vehicleid == vehicle.vehicleid).update({'has_options': False})
+                    session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle.vehicle_id).update({'has_options': False})
 
 # =============================================================================
 # 메인 실행

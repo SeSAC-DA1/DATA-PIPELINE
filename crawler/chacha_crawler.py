@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # DB 관련
 from db.connection import session_scope
 from db.model import (
-    Vehicle, OptionMaster, VehicleOption,
+    Vehicle, OptionMaster, VehicleOption, Inspection,
     create_tables_if_not_exist, check_database_status
 )
 
@@ -1036,6 +1036,360 @@ def crawl_kb_chachacha_with_options():
 # =============================================================================
 # 메인 실행
 # =============================================================================
+
+def convert_chacha_inspection_to_record(html_content: str, vehicle_id: int) -> Optional[Dict]:
+    """차차차 검사 HTML을 Inspection 레코드로 변환"""
+    try:
+        from bs4 import BeautifulSoup
+        
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # 기본 정보 추출
+        def get_text_by_selector(selector: str) -> str:
+            element = soup.select_one(selector)
+            return element.get_text(strip=True) if element else ""
+        
+        def get_checked_radio(prefix: str, suffix: str = "") -> str:
+            """체크된 라디오 버튼 값 반환"""
+            for i in range(1, 10):  # 최대 9개까지 확인
+                selector = f"#{prefix}_{i}_1"
+                if suffix:
+                    selector = f"#{prefix}_{suffix}_{i}_1"
+                element = soup.select_one(selector)
+                if element and element.get('checked'):
+                    return element.get('value', str(i))
+            return ""
+        
+        def get_emission_values() -> tuple:
+            """배출가스 값 추출"""
+            co_element = soup.select_one('.ar')
+            if co_element:
+                text = co_element.get_text(strip=True)
+                parts = text.split(', ')
+                co = parts[0] if len(parts) > 0 else ""
+                hc = parts[1] if len(parts) > 1 else ""
+                smoke = parts[2] if len(parts) > 2 else ""
+                return co, hc, smoke
+            return "", "", ""
+        
+        def get_mileage() -> int:
+            """주행거리 추출"""
+            km_element = soup.select_one('.km')
+            if km_element:
+                km_text = km_element.get_text(strip=True).replace(',', '').replace('Km', '')
+                try:
+                    return int(km_text)
+                except:
+                    pass
+            return 0
+        
+        def get_price() -> int:
+            """최종 가격 추출"""
+            price_elements = soup.select('.price_wrap .price')
+            if price_elements:
+                price_text = ''.join([elem.get_text(strip=True) for elem in price_elements])
+                try:
+                    return int(price_text) * 10000  # 만원 단위
+                except:
+                    pass
+            return 0
+        
+        # 기본 정보 추출
+        inspection_no = get_text_by_selector('.num')
+        
+        # 검사유효기간 추출
+        validity_text = get_text_by_selector('th:contains("검사유효기간") + td')
+        if ' ~ ' in validity_text:
+            validity_parts = validity_text.split(' ~ ')
+            inspection_valid_start = validity_parts[0] if len(validity_parts) > 0 else ""
+            inspection_valid_end = validity_parts[1] if len(validity_parts) > 1 else ""
+        else:
+            inspection_valid_start = ""
+            inspection_valid_end = ""
+        
+        # 보증유형
+        guaranty_type = "자가보증" if soup.select_one('input[value="자가보증"]:checked') else "보험사보증"
+        
+        # 주행거리
+        mileage = get_mileage()
+        
+        # 배출가스
+        emission_co, emission_hc, emission_smoke = get_emission_values()
+        
+        # 차량 상태 정보
+        accident_history = bool(soup.select_one('input[value="있음"]:checked') and '사고이력' in str(soup))
+        simple_repair = bool(soup.select_one('input[value="있음"]:checked') and '단순수리' in str(soup))
+        tuning = bool(soup.select_one('#bc_3_2:checked'))  # 튜닝 있음
+        tuning_legal = bool(soup.select_one('#bc_31_1:checked'))  # 적법 튜닝
+        special_history = bool(soup.select_one('#bc_4_2:checked'))  # 특별이력 있음
+        flood_damage = bool(soup.select_one('#bc_41_1:checked'))  # 침수
+        fire_damage = bool(soup.select_one('#bc_41_2:checked'))  # 화재
+        usage_change = bool(soup.select_one('#bc_5_2:checked'))  # 용도변경 있음
+        rental_usage = bool(soup.select_one('#bc_51_1:checked'))  # 렌트
+        business_usage = bool(soup.select_one('#bc_51_3:checked'))  # 영업용
+        recall_target = bool(soup.select_one('#bc_81_1:checked'))  # 리콜 대상
+        recall_completed = bool(soup.select_one('#bc_82_1:checked'))  # 리콜 이행
+        
+        # 색상 타입
+        color_type = "무채색" if soup.select_one('#bc_61_1:checked') else "유채색"
+        
+        # 주요옵션
+        main_options = bool(soup.select_one('#bc_7_2:checked'))
+        sunroof = bool(soup.select_one('#bc_71_1:checked'))
+        navigation = bool(soup.select_one('#bc_71_2:checked'))
+        
+        # 세부 검사 결과 추출 함수
+        def get_checkbox_value(prefix: str, suffix: str = "") -> str:
+            """체크박스 값 반환"""
+            for i in range(1, 10):
+                selector = f"#{prefix}_{i}_1"
+                if suffix:
+                    selector = f"#{prefix}_{suffix}_{i}_1"
+                element = soup.select_one(selector)
+                if element and element.get('checked'):
+                    return element.get('value', '1')
+            return ""
+        
+        # 자기진단
+        engine_self_diagnosis = get_checkbox_value("dc_11")
+        transmission_self_diagnosis = get_checkbox_value("dc_12")
+        
+        # 원동기 세부검사
+        engine_idle_state = get_checkbox_value("dc_21")
+        oil_leak_cylinder_cover = get_checkbox_value("dc_221")
+        oil_leak_cylinder_head = get_checkbox_value("dc_222")
+        oil_leak_cylinder_block = get_checkbox_value("dc_223")
+        oil_level = get_checkbox_value("dc_23")
+        coolant_leak_cylinder_head = get_checkbox_value("dc_231")
+        coolant_leak_water_pump = get_checkbox_value("dc_232")
+        coolant_leak_radiator = get_checkbox_value("dc_233")
+        coolant_level = get_checkbox_value("dc_234")
+        common_rail = get_checkbox_value("dc_24")
+        
+        # 변속기 세부검사
+        at_oil_leak = get_checkbox_value("dc_311")
+        at_oil_level = get_checkbox_value("dc_312")
+        at_idle_state = get_checkbox_value("dc_313")
+        mt_oil_leak = get_checkbox_value("dc_321")
+        mt_gear_shifting = get_checkbox_value("dc_322")
+        mt_oil_level = get_checkbox_value("dc_323")
+        mt_idle_state = get_checkbox_value("dc_324")
+        
+        # 동력전달 세부검사
+        clutch_assembly = get_checkbox_value("dc_41")
+        cv_joint = get_checkbox_value("dc_42")
+        drive_shaft_bearing = get_checkbox_value("dc_43")
+        differential_gear = get_checkbox_value("dc_44")
+        
+        # 조향 세부검사
+        power_steering_oil_leak = get_checkbox_value("dc_51")
+        steering_pump = get_checkbox_value("dc_522")
+        steering_gear = get_checkbox_value("dc_521")
+        steering_joint = get_checkbox_value("dc_524")
+        power_high_pressure_hose = get_checkbox_value("dc_525")
+        tie_rod_end_ball_joint = get_checkbox_value("dc_523")
+        
+        # 제동 세부검사
+        brake_master_cylinder_oil_leak = get_checkbox_value("dc_61")
+        brake_oil_leak = get_checkbox_value("dc_62")
+        brake_booster_state = get_checkbox_value("dc_63")
+        
+        # 전기 세부검사
+        generator_output = get_checkbox_value("dc_71")
+        starter_motor = get_checkbox_value("dc_72")
+        wiper_motor = get_checkbox_value("dc_73")
+        interior_fan_motor = get_checkbox_value("dc_74")
+        radiator_fan_motor = get_checkbox_value("dc_75")
+        window_motor = get_checkbox_value("dc_76")
+        
+        # 고전원전기장치
+        charger_insulation = get_checkbox_value("dc_91")
+        drive_battery_isolation = get_checkbox_value("dc_92")
+        high_voltage_wiring = get_checkbox_value("dc_93")
+        
+        # 연료
+        fuel_leak = get_checkbox_value("dc_81")
+        
+        # 수리필요 항목
+        exterior_condition = get_checkbox_value("eac_1")
+        interior_condition = get_checkbox_value("eac_2")
+        gloss_condition = get_checkbox_value("eac_3")
+        room_cleaning = get_checkbox_value("eac_4")
+        wheel_condition = get_checkbox_value("eac_5")
+        tire_condition = get_checkbox_value("eac_6")
+        glass_condition = get_checkbox_value("eac_7")
+        
+        # 기본품목
+        basic_items_status = get_checkbox_value("eac_8")
+        user_manual = bool(soup.select_one('#eac_83_1:checked'))
+        safety_triangle = bool(soup.select_one('#eac_84_1:checked'))
+        jack = bool(soup.select_one('#eac_83_1:checked'))
+        spanner = bool(soup.select_one('#eac_83_1:checked'))
+        
+        # 검사자 정보
+        inspector_name = get_text_by_selector('.name2')
+        inspection_agency = get_text_by_selector('.name1')
+        
+        # 특기사항
+        special_notes = get_text_by_selector('.wrap')
+        
+        # 최종 가격
+        final_price = get_price()
+        
+        # 검사일 (서명란에서 추출)
+        inspection_date = ""
+        date_element = soup.find(string=lambda text: text and "년" in text and "월" in text and "일" in text)
+        if date_element:
+            inspection_date = date_element.strip()
+        
+        result = {
+            "vehicle_id": vehicle_id,
+            "platform": "chacha",
+            
+            # === 검사 식별 정보 ===
+            "inspection_no": inspection_no,
+            "inspection_date": inspection_date,
+            "inspection_valid_start": inspection_valid_start,
+            "inspection_valid_end": inspection_valid_end,
+            
+            # === 검사 관련 기본 정보 ===
+            "guaranty_type": guaranty_type,
+            "mileage": mileage,
+            
+            # 차량 상태 정보
+            "accident_history": accident_history,
+            "simple_repair": simple_repair,
+            "tuning": tuning,
+            "tuning_legal": tuning_legal,
+            "special_history": special_history,
+            "flood_damage": flood_damage,
+            "fire_damage": fire_damage,
+            "usage_change": usage_change,
+            "rental_usage": rental_usage,
+            "business_usage": business_usage,
+            "color_type": color_type,
+            "main_options": main_options,
+            "sunroof": sunroof,
+            "navigation": navigation,
+            "recall_target": recall_target,
+            "recall_completed": recall_completed,
+            
+            # 검사 상세 정보
+            "emission_co": emission_co,
+            "emission_hc": emission_hc,
+            "emission_smoke": emission_smoke,
+            
+            # 검사자/발급 정보
+            "inspector_name": inspector_name,
+            "inspection_agency": inspection_agency,
+            "final_price": final_price,
+            "special_notes": special_notes,
+            
+            # 플랫폼별 원본 데이터
+            "raw_data": {"html_content": html_content[:5000]},  # HTML 내용 일부만 저장
+            
+            # 세부 검사 결과
+            "engine_self_diagnosis": engine_self_diagnosis,
+            "transmission_self_diagnosis": transmission_self_diagnosis,
+            "engine_idle_state": engine_idle_state,
+            "oil_leak_cylinder_cover": oil_leak_cylinder_cover,
+            "oil_leak_cylinder_head": oil_leak_cylinder_head,
+            "oil_leak_cylinder_block": oil_leak_cylinder_block,
+            "oil_level": oil_level,
+            "coolant_leak_cylinder_head": coolant_leak_cylinder_head,
+            "coolant_leak_water_pump": coolant_leak_water_pump,
+            "coolant_leak_radiator": coolant_leak_radiator,
+            "coolant_level": coolant_level,
+            "common_rail": common_rail,
+            "at_oil_leak": at_oil_leak,
+            "at_oil_level": at_oil_level,
+            "at_idle_state": at_idle_state,
+            "mt_oil_leak": mt_oil_leak,
+            "mt_gear_shifting": mt_gear_shifting,
+            "mt_oil_level": mt_oil_level,
+            "mt_idle_state": mt_idle_state,
+            "clutch_assembly": clutch_assembly,
+            "cv_joint": cv_joint,
+            "drive_shaft_bearing": drive_shaft_bearing,
+            "differential_gear": differential_gear,
+            "power_steering_oil_leak": power_steering_oil_leak,
+            "steering_pump": steering_pump,
+            "steering_gear": steering_gear,
+            "steering_joint": steering_joint,
+            "power_high_pressure_hose": power_high_pressure_hose,
+            "tie_rod_end_ball_joint": tie_rod_end_ball_joint,
+            "brake_master_cylinder_oil_leak": brake_master_cylinder_oil_leak,
+            "brake_oil_leak": brake_oil_leak,
+            "brake_booster_state": brake_booster_state,
+            "generator_output": generator_output,
+            "starter_motor": starter_motor,
+            "wiper_motor": wiper_motor,
+            "interior_fan_motor": interior_fan_motor,
+            "radiator_fan_motor": radiator_fan_motor,
+            "window_motor": window_motor,
+            "charger_insulation": charger_insulation,
+            "drive_battery_isolation": drive_battery_isolation,
+            "high_voltage_wiring": high_voltage_wiring,
+            "fuel_leak": fuel_leak,
+            "exterior_condition": exterior_condition,
+            "interior_condition": interior_condition,
+            "gloss_condition": gloss_condition,
+            "room_cleaning": room_cleaning,
+            "wheel_condition": wheel_condition,
+            "tire_condition": tire_condition,
+            "glass_condition": glass_condition,
+            "basic_items_status": basic_items_status,
+            "user_manual": user_manual,
+            "safety_triangle": safety_triangle,
+            "jack": jack,
+            "spanner": spanner
+        }
+        
+        return result
+    except Exception as e:
+        print(f"  [차차차 검사 데이터 변환 오류] {e}")
+        return None
+
+def save_inspection_to_db(inspection_records: List[Dict]):
+    """검사 이력을 DB에 저장 (기존 있으면 스킵, 없으면 삽입)"""
+    if not inspection_records:
+        print(f"  [검사 이력 저장] 저장할 레코드가 없음")
+        return 0
+    
+    try:
+        with session_scope() as session:
+            # 기존 레코드들을 한 번에 조회
+            vehicle_ids = [rec['vehicle_id'] for rec in inspection_records]
+            print(f"  [검사 이력 저장] 기존 레코드 확인 중... (vehicle_ids: {len(vehicle_ids)}개)")
+            
+            existing_records = session.query(Inspection).filter(
+                Inspection.vehicle_id.in_(vehicle_ids),
+                Inspection.platform == 'chacha'
+            ).all()
+            
+            existing_keys = {(r.vehicle_id, r.platform) for r in existing_records}
+            print(f"  [검사 이력 저장] 기존 레코드: {len(existing_keys)}건")
+            
+            # 신규 레코드만 필터링
+            new_records = []
+            for record in inspection_records:
+                key = (record['vehicle_id'], record['platform'])
+                if key not in existing_keys:
+                    new_records.append(Inspection(**record))
+            
+            print(f"  [검사 이력 저장] 신규 레코드: {len(new_records)}건")
+            
+            # 신규 레코드만 배치 삽입
+            if new_records:
+                session.bulk_save_objects(new_records)
+                print(f"  [검사 이력 저장] {len(new_records)}건 신규 저장 완료")
+            else:
+                print(f"  [검사 이력 저장] 모든 레코드가 이미 존재함")
+            
+            return len(new_records)
+    except Exception as e:
+        print(f"  [검사 이력 저장 오류] {e}")
+        return 0
 
 if __name__ == "__main__":
     print("KB 차차차 크롤러 시작")
