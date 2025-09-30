@@ -1,6 +1,3 @@
-# Environments
-!.env.example
-
 # Node modules
 frontend/node_modules
 
