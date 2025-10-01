@@ -35,7 +35,7 @@ class Vehicle(Base):
 class OptionMaster(Base):
     __tablename__ = 'option_masters'
     
-    option_id = Column(Integer, primary_key=True, autoincrement=True)
+    option_master_id = Column(Integer, primary_key=True, autoincrement=True)
     option_code = Column(String(50), unique=True, nullable=False)  # 'SUNROOF', 'LDWS' 등
     option_name = Column(String(100), nullable=False)  # '선루프', '차선이탈경고' 등
     option_group = Column(String(50), nullable=False)  # '외관/내장', '안전' 등
@@ -51,14 +51,14 @@ class OptionMaster(Base):
 class VehicleOption(Base):
     __tablename__ = 'vehicle_options'
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    vehicle_option_id = Column(Integer, primary_key=True, autoincrement=True)
     vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id'), nullable=False)
-    option_id = Column(Integer, ForeignKey('option_masters.option_id'), nullable=False)
+    option_master_id = Column(Integer, ForeignKey('option_masters.option_master_id'), nullable=False)
     
     # 인덱스
     __table_args__ = (
-        UniqueConstraint('vehicle_id', 'option_id', name='uq_vehicle_option'),
-        Index('idx_vehicle_option', 'vehicle_id', 'option_id'),
+        UniqueConstraint('vehicle_id', 'option_master_id', name='uq_vehicle_option'),
+        Index('idx_vehicle_option', 'vehicle_id', 'option_master_id'),
     )
 
 # 보험 이력 (일반화된 구조)
@@ -106,56 +106,45 @@ class InsuranceHistory(Base):
     )
 
 # 공통 열거형
-Leak3 = Enum('NONE','MINOR','LEAK', name='leak3')        # 없음/미세/누유(누수)
 GoodBad = Enum('GOOD','BAD', name='goodbad')               # 양호/불량
+Leak3 = Enum('NONE','MINOR','LEAK', name='leak3')        # 없음/미세/누유(누수)
 Adeq3 = Enum('ADEQ','LACK','OVER', name='adeq3')         # 적정/부족/과다
-YesNo = Enum('NO','YES', name='yesno')                   # 없음/있음
-TuningOK = Enum('LEGAL','ILLEGAL', name='tuning_ok')
-TuningTyp = Enum('STRUCTURE','DEVICE','NONE','UNKNOWN', name='tuning_type')
+DetailType = Enum('INNER', 'OUTER', name='detail_type')    # 검사 항목/외판 구분
+PanelRank = Enum('OUTER_1','OUTER_2','STRUCT_A','STRUCT_B','STRUCT_C', name='panel_rank')  # 외판/골격 랭크
 
 class Inspection(Base):
-    """차량 성능/상태 점검 요약"""
+    """차량 성능/상태 점검 요약 (엔카 + 차차차 공통)"""
     __tablename__ = 'inspections'
-
-    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id', ondelete='CASCADE'), primary_key=True)
+    inspection_id = Column(Integer, primary_key=True, autoincrement=True)
+    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id', ondelete='CASCADE'))
     platform = Column(String(16), nullable=False)
     
     # 검사 메타정보
-    source_record_no = Column(String(64))    # master.detail.recordNo
-    supply_num = Column(String(64))          # master.supplyNum
-    inspected_at = Column(String(8))         # detail.issueDate (YYYYMMDD)
-    valid_from = Column(String(8))           # detail.validityStartDate
-    valid_to = Column(String(8))             # detail.validityEndDate
-    mileage_at_inspect = Column(Integer)     # detail.mileage
+    inspected_at = Column(String(8))         # 검사일 (YYYYMMDD)
+    valid_from = Column(String(8))           # 유효기간 시작
+    valid_to = Column(String(8))             # 유효기간 종료
+    mileage_at_inspect = Column(Integer)     # 검사 당시 주행거리
     
-    # 요약 플래그
-    accident_history = Column(Boolean)       # master.accdient
-    simple_repair = Column(Boolean)          # master.simpleRepair
-    waterlog = Column(Boolean)               # detail.waterlog
-    fire_history = Column(Boolean)           # (차차차)
-    tuning_exist = Column(Boolean)           # detail.tuning
-    recall_applicable = Column(Boolean)      # detail.recall
+    # 요약 플래그 (공통)
+    accident_history = Column(Boolean)       # 사고이력 유무
+    simple_repair = Column(Boolean)          # 단순수리 유무
+    waterlog = Column(Boolean)               # 침수 유무
+    fire_history = Column(Boolean)           # 화재 유무
+    tuning_exist = Column(Boolean)           # 튜닝 유무
+    recall_applicable = Column(Boolean)      # 리콜 대상 유무
+    recall_fulfilled = Column(Boolean)       # 리콜 이행 완료 여부
     
-    # 전반 상태
-    engine_check_ok = Column(Boolean)        # detail.engineCheck=='Y'
-    trans_check_ok = Column(Boolean)         # detail.trnsCheck=='Y'
-    car_state_code = Column(String(8))       # carStateType.code
-    car_state_title = Column(String(32))     # carStateType.title
-    board_state_code = Column(String(8))     # boardStateType.code
-    board_state_title = Column(String(32))   # boardStateType.title
-    guaranty_code = Column(String(8))        # guarantyType.code
-    guaranty_title = Column(String(32))      # guarantyType.title
+    # 주요 점검 결과
+    engine_check_ok = Column(Boolean)        # 엔진(원동기) 양호
+    trans_check_ok = Column(Boolean)         # 변속기 양호
     
-    # 외판/골격 카운트
-    outer_1 = Column(SmallInteger, default=0)
-    outer_2 = Column(SmallInteger, default=0)
-    struct_a = Column(SmallInteger, default=0)
-    struct_b = Column(SmallInteger, default=0)
-    struct_c = Column(SmallInteger, default=0)
+    # 보증 유형 (공통화)
+    guaranty_type = Column(String(32))       # 'SELF', 'INSURANCE' 등
     
     # 기타
-    images = Column(Text)                    # 이미지 URL (쉼표 구분)
-    remarks = Column(Text)                   # detail.comments
+    image_front = Column(Text)               # 앞면 이미지 URL
+    image_rear = Column(Text)                # 뒷면 이미지 URL
+    remarks = Column(Text)                   # 특기사항/점검자 의견
     
     __table_args__ = (
         Index('idx_inspection_vehicle', 'vehicle_id'),
@@ -166,31 +155,25 @@ class InspectionDetail(Base):
     """검사 세부 항목 (검사 항목 + 외판/골격 통합)"""
     __tablename__ = 'inspection_details'
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id', ondelete='CASCADE'), nullable=False)
+    inspection_detail_id = Column(Integer, primary_key=True, autoincrement=True)
+    inspection_id = Column(Integer, ForeignKey('inspections.inspection_id', ondelete='CASCADE'), nullable=False)
     
     # 항목 유형 구분
-    detail_type = Column(Enum('ITEM', 'PANEL', name='detail_type'), nullable=False)
+    detail_type = Column(DetailType, nullable=False)
     
     # 계층 정보 (공통)
     group_code = Column(String(8), nullable=False)    # S01(원동기), P0(외판) 등
     group_title = Column(String(32), nullable=False)  # 원동기, 외판 등
-    item_code = Column(String(16), nullable=False)    # s004, p022 등
+    item_code = Column(String(32), nullable=False)    # engine_idle_state, front_fender 등
     item_title = Column(String(64), nullable=False)   # 실린더 커버, 프론트 휀더 등
-    parent_code = Column(String(16))                  # 부모 코드
-    parent_title = Column(String(64))                 # 부모 이름
     
-    # 원본 상태 보존 (공통)
-    status_code = Column(String(8))                   # 1, 3, 6, X 등
-    status_title = Column(String(32))                 # 양호, 미세누유, 교환 등
-    
-    # === ITEM 전용: 일반화 상태 (해당하는 것만 채움) ===
+    # === INNER 전용: 일반화 상태 (해당하는 것만 채움) ===
     good_bad = Column(GoodBad)                        # 양호/불량
     leak_level = Column(Leak3)                        # 없음/미세/누유
     level_state = Column(Adeq3)                       # 적정/부족/과다
     
-    # === PANEL 전용: 외판/골격 정보 ===
-    rank = Column(Enum('OUTER_1','OUTER_2','STRUCT_A','STRUCT_B','STRUCT_C', name='panel_rank'))
+    # === OUTER 전용: 외판/골격 정보 ===
+    rank = Column(PanelRank)
     exchanged = Column(Boolean, default=False)        # X: 교환
     welded = Column(Boolean, default=False)           # W: 판금/용접
     scratched = Column(Boolean, default=False)        # A: 흠집
@@ -201,10 +184,10 @@ class InspectionDetail(Base):
     note = Column(String(256))                        # 메모
     
     __table_args__ = (
-        Index('idx_detail_vehicle', 'vehicle_id'),
-        Index('idx_detail_type', 'vehicle_id', 'detail_type'),
-        Index('idx_detail_item', 'vehicle_id', 'item_code'),
-        Index('idx_detail_group', 'vehicle_id', 'group_code'),
+        Index('idx_detail_inspection', 'inspection_id'),
+        Index('idx_detail_type', 'inspection_id', 'detail_type'),
+        Index('idx_detail_item', 'inspection_id', 'item_code'),
+        Index('idx_detail_group', 'inspection_id', 'group_code'),
     )
 
 # =============================================================================
