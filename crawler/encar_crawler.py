@@ -184,9 +184,10 @@ def convert_to_vehicle_record(encar_data: Dict, details: Dict, car_type: str = "
             "origin": "국산" if car_type == "Y" else "수입",
             "car_type": spec.get("bodyName"),
             "manufacturer": category.get("manufacturerName"),
-            "model": category.get("modelName"),
-            "generation": category.get("modelGroupName"),
-            "trim": category.get("gradeName"),
+            "model_group": category.get("modelGroupName"),  # 엔카: modelGroupName → model_group (EV6, 모하비)
+            "model": category.get("modelName"),  # 엔카: modelName → model (더 뉴 EV6, 모하비 더 마스터)
+            "grade": category.get("gradeName"),  # 엔카: gradeName → grade (롱레인지 2wd, 디젤 3.0 4WD 6인승)
+            "trim": category.get("gradeDetailName", ""),  # 엔카: gradeDetailName → trim (어스, 마스터즈 그래비티)
             "fuel_type": spec.get("fuelName"),
             "transmission": spec.get("transmissionName"),
             "displacement": int(spec.get("displacement") or 0),
@@ -450,7 +451,7 @@ def save_data_to_db(records: List[Dict]):
             # 차량 정보 저장 (has_options 포함)
             vehicle_mappings = []
             for rec in records:
-                vehicle_data = {k: v for k, v in rec.items() if k != 'options'}
+                vehicle_data = {k: v for k, v in rec.items() if k not in ['options', 'insurance_info', 'inspection_info']}
                 # has_options 설정: 옵션이 있으면 True, 없으면 False
                 platform_options = rec.get('options', [])
                 global_codes = convert_platform_options_to_global(platform_options, 'encar')

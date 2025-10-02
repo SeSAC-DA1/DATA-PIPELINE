@@ -99,7 +99,7 @@ def build_session() -> requests.Session:
 def get_existing_car_seqs() -> set:
     """DB에서 이미 크롤링된 carSeq들을 가져옵니다."""
     with session_scope() as session:
-        result = session.query(Vehicle.carseq).filter(Vehicle.platform == "kb_chachacha").all()
+        result = session.query(Vehicle.car_seq).filter(Vehicle.platform == "kb_chachacha").all()
         return {str(row[0]) for row in result}
 
 # =============================================================================
@@ -497,9 +497,10 @@ def create_vehicle_record(api_data: Dict[str, Any], html_data: Dict[str, Any], m
         "origin": country_code,
         "car_type": html_data.get("class", "기타"),
         "manufacturer": api_data.get("makerName", ""),
-        "model": api_data.get("className", ""),
-        "generation": api_data.get("carName", ""),
-        "trim": api_data.get("gradeName", ""),
+        "model_group": api_data.get("className", ""),  
+        "model": api_data.get("carName", ""),  
+        "grade": api_data.get("modelName", ""),  
+        "trim": api_data.get("gradeName", ""),  
         "fuel_type": html_data.get("fuel", ""),
         "transmission": html_data.get("transmission", ""),
         "displacement": html_data.get("displacement", 0),
@@ -524,12 +525,12 @@ def save_vehicle_options_batch(vehicles_options: List[Dict], platform: str = 'kb
     with session_scope() as session:
         try:
             # 1. 모든 옵션 마스터를 한 번에 조회 (N+1 쿼리 문제 해결)
-            option_masters = {opt.option_code: opt.option_id for opt in session.query(OptionMaster).all()}
+            option_masters = {opt.option_code: opt.option_master_id for opt in session.query(OptionMaster).all()}
             
             # 2. 기존 VehicleOption들을 한 번에 조회
             existing_pairs = set()
-            for vo in session.query(VehicleOption.vehicle_id, VehicleOption.option_id).all():
-                existing_pairs.add((vo.vehicle_id, vo.option_id))
+            for vo in session.query(VehicleOption.vehicle_id, VehicleOption.option_master_id).all():
+                existing_pairs.add((vo.vehicle_id, vo.option_master_id))
             
             # 3. 벌크 인서트용 데이터 준비
             bulk_data = []
@@ -547,13 +548,13 @@ def save_vehicle_options_batch(vehicles_options: List[Dict], platform: str = 'kb
                 
                 # 중복 제거된 옵션만 추가
                 for option_code in global_codes:
-                    option_id = option_masters.get(option_code)
-                    if option_id and (vehicle_id, option_id) not in existing_pairs:
+                    option_master_id = option_masters.get(option_code)
+                    if option_master_id and (vehicle_id, option_master_id) not in existing_pairs:
                         bulk_data.append({
                             'vehicle_id': vehicle_id,
-                            'option_id': option_id
+                            'option_master_id': option_master_id
                         })
-                        existing_pairs.add((vehicle_id, option_id))  # 중복 방지
+                        existing_pairs.add((vehicle_id, option_master_id))  # 중복 방지
             
             # 4. 벌크 인서트 실행
             if bulk_data:
@@ -584,7 +585,7 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
     
     # 기존 차량번호를 한 번에 조회 (최적화)
     with session_scope() as session:
-        existing_vehiclenos = {row[0] for row in session.query(Vehicle.vehicleno).all() if row[0]}
+        existing_vehiclenos = {row[0] for row in session.query(Vehicle.vehicle_no).all() if row[0]}
         print(f"[기존 DB] 저장된 차량번호: {len(existing_vehiclenos)}개")
     
     # 배치별로 처리
@@ -631,32 +632,33 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
         
         for record in batch_records:
             vehicle_data = {
-                'carseq': int(record.get('car_seq', 0)),
-                'vehicleno': record.get('vehicle_no'),
+                'car_seq': int(record.get('car_seq', 0)),
+                'vehicle_no': record.get('vehicle_no'),
                 'platform': record.get('platform'),
                 'origin': record.get('origin'),
-                'cartype': record.get('car_type'),
+                'car_type': record.get('car_type'),
                 'manufacturer': record.get('manufacturer'),
+                'model_group': record.get('model_group'),
                 'model': record.get('model'),
-                'generation': record.get('generation'),
+                'grade': record.get('grade'),
                 'trim': record.get('trim'),
-                'fueltype': record.get('fuel_type'),
+                'fuel_type': record.get('fuel_type'),
                 'transmission': record.get('transmission'),
-                'colorname': record.get('color_name'),
-                'modelyear': int(record.get('model_year', 0)),
-                'firstregistrationdate': int(record.get('first_registration_date', 0)),
+                'color_name': record.get('color_name'),
+                'model_year': int(record.get('model_year', 0)),
+                'first_registration_date': int(record.get('first_registration_date', 0)),
                 'distance': int(record.get('distance', 0)),
                 'price': int(record.get('price', 0)),
-                'originprice': int(record.get('origin_price', 0)),
-                'selltype': record.get('sell_type'),
+                'origin_price': int(record.get('origin_price', 0)),
+                'sell_type': record.get('sell_type'),
                 'location': record.get('location'),
-                'detailurl': record.get('detail_url'),
+                'detail_url': record.get('detail_url'),
                 'photo': record.get('photo'),
                 'has_options': None  
             }
             
             # 중복 체크
-            if vehicle_data['vehicleno'] and vehicle_data['vehicleno'] in existing_vehiclenos:
+            if vehicle_data['vehicle_no'] and vehicle_data['vehicle_no'] in existing_vehiclenos:
                 skipped_count += 1
                 continue
             
@@ -666,7 +668,7 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
             options = record.get('options', [])
             if options:
                 vehicles_options.append({
-                    'carseq': vehicle_data['carseq'],
+                    'car_seq': vehicle_data['car_seq'],
                     'options': options
                 })
         
@@ -678,21 +680,21 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
         session.flush()
         
         # 3. 저장된 차량들의 ID 조회
-        carseqs = [v['carseq'] for v in vehicle_bulk_data]
-        saved_vehicles = session.query(Vehicle).filter(Vehicle.carseq.in_(carseqs)).all()
-        vehicle_id_map = {v.carseq: v.vehicleid for v in saved_vehicles}
+        car_seqs = [v['car_seq'] for v in vehicle_bulk_data]
+        saved_vehicles = session.query(Vehicle).filter(Vehicle.car_seq.in_(car_seqs)).all()
+        vehicle_id_map = {v.car_seq: v.vehicle_id for v in saved_vehicles}
         
         # 4. has_options 플래그 업데이트
         vehicles_with_options = []
         vehicles_without_options = []
         
         for vehicle_data in vehicle_bulk_data:
-            carseq = vehicle_data['carseq']
-            vehicle_id = vehicle_id_map.get(carseq)
+            car_seq = vehicle_data['car_seq']
+            vehicle_id = vehicle_id_map.get(car_seq)
             
             if vehicle_id:
                 # 옵션 유무 확인
-                has_options = any(vo['carseq'] == carseq for vo in vehicles_options)
+                has_options = any(vo['car_seq'] == car_seq for vo in vehicles_options)
                 if has_options:
                     vehicles_with_options.append(vehicle_id)
                 else:
@@ -701,12 +703,12 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
         # has_options 플래그 일괄 업데이트
         if vehicles_with_options:
             session.query(Vehicle).filter(
-                Vehicle.vehicleid.in_(vehicles_with_options)
+                Vehicle.vehicle_id.in_(vehicles_with_options)
             ).update({Vehicle.has_options: True}, synchronize_session=False)
         
         if vehicles_without_options:
             session.query(Vehicle).filter(
-                Vehicle.vehicleid.in_(vehicles_without_options)
+                Vehicle.vehicle_id.in_(vehicles_without_options)
             ).update({Vehicle.has_options: False}, synchronize_session=False)
         
         # 5. 옵션 정보 일괄 저장
@@ -714,8 +716,8 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
         if vehicles_options:
             # vehicle_id 매핑 추가
             for vo in vehicles_options:
-                carseq = vo['carseq']
-                vehicle_id = vehicle_id_map.get(carseq)
+                car_seq = vo['car_seq']
+                vehicle_id = vehicle_id_map.get(car_seq)
                 if vehicle_id:
                     vo['vehicle_id'] = vehicle_id
             
@@ -724,8 +726,8 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
         
         # 6. 기존 차량번호 목록 업데이트
         for vehicle_data in vehicle_bulk_data:
-            if vehicle_data['vehicleno']:
-                existing_vehiclenos.add(vehicle_data['vehicleno'])
+            if vehicle_data['vehicle_no']:
+                existing_vehiclenos.add(vehicle_data['vehicle_no'])
         
         return len(vehicle_bulk_data), skipped_count, options_saved_count
 
@@ -764,7 +766,7 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
         complete_records.append(record)
 
         print(
-            f"   [완료] {record['manufacturer']} {record['model']} {record['generation']} | "
+            f"   [완료] {record['manufacturer']} {record['model_group']} {record['model']} | "
             f"가격: {record['price']}만원, 주행거리: {record['distance']:,}km, "
             f"이미지: {'OK' if record['photo'] else 'NO PHOTO'}, 옵션: {len(options)}개"
         )
@@ -818,20 +820,20 @@ def crawl_options_batch(vehicles: List[Vehicle], requests_session: requests.Sess
     # 1단계: 모든 차량의 옵션 크롤링
     for vehicle in vehicles:
         try:
-            options = get_car_options_from_html(str(vehicle.carseq), requests_session)
+            options = get_car_options_from_html(str(vehicle.car_seq), requests_session)
             
             if options:  # 옵션이 있는 경우
                 vehicles_options.append({
-                    'vehicle_id': vehicle.vehicleid,
+                    'vehicle_id': vehicle.vehicle_id,
                     'options': options
                 })
-                vehicles_with_options.append(vehicle.vehicleid)
+                vehicles_with_options.append(vehicle.vehicle_id)
                 processed_count += 1
             else:  # 옵션이 없는 경우
-                vehicles_without_options.append(vehicle.vehicleid)
+                vehicles_without_options.append(vehicle.vehicle_id)
             
         except Exception as e:
-            print(f"[옵션 크롤링 실패] carseq: {vehicle.carseq}: {e}")
+            print(f"[옵션 크롤링 실패] car_seq: {vehicle.car_seq}: {e}")
         
         time.sleep(delay)
     
@@ -845,13 +847,13 @@ def crawl_options_batch(vehicles: List[Vehicle], requests_session: requests.Sess
         # 옵션이 있는 차량들
         if vehicles_with_options:
             session.query(Vehicle).filter(
-                Vehicle.vehicleid.in_(vehicles_with_options)
+                Vehicle.vehicle_id.in_(vehicles_with_options)
             ).update({Vehicle.has_options: True}, synchronize_session=False)
         
         # 옵션이 없는 차량들
         if vehicles_without_options:
             session.query(Vehicle).filter(
-                Vehicle.vehicleid.in_(vehicles_without_options)
+                Vehicle.vehicle_id.in_(vehicles_without_options)
             ).update({Vehicle.has_options: False}, synchronize_session=False)
         
         session.commit()
@@ -963,12 +965,12 @@ def get_vehicles_without_options_details() -> List[Dict[str, Any]]:
         result = []
         for vehicle in vehicles:
             result.append({
-                'carseq': vehicle.carseq,
+                'carseq': vehicle.car_seq,
                 'manufacturer': vehicle.manufacturer,
+                'model_group': vehicle.model_group,
                 'model': vehicle.model,
-                'generation': vehicle.generation,
                 'price': vehicle.price,
-                'year': vehicle.modelyear
+                'year': vehicle.model_year
             })
         return result
 
@@ -1010,7 +1012,7 @@ def crawl_kb_chachacha_with_options():
         sample_vehicles = get_vehicles_without_options_details()
         print(f"[옵션 상태 미확인 차량 샘플] (최대 10대):")
         for vehicle in sample_vehicles:
-            print(f"  - {vehicle['manufacturer']} {vehicle['model']} {vehicle['generation']} "
+            print(f"  - {vehicle['manufacturer']} {vehicle['model_group']} {vehicle['model']} "
                   f"(carSeq: {vehicle['carseq']}, 가격: {vehicle['price']}만원, 연식: {vehicle['year']})")
     
     # 4. 옵션 상태 미확인 차량이 있으면 옵션 크롤링 먼저 실행

@@ -13,10 +13,11 @@ class Vehicle(Base):
     platform = Column(String)
     origin = Column(String)
     car_type = Column(String)
-    manufacturer = Column(String)
-    model = Column(String)
-    generation = Column(String)
-    trim = Column(String)
+    manufacturer = Column(String) #제조사
+    model_group = Column(String)  # 모델그룹: EV6, 모하비
+    model = Column(String)  # 모델명/세대: 더 뉴 EV6, 모하비 더 마스터
+    grade = Column(String)  # 등급: 롱레인지 2WD, 디젤 3.0 4WD 6인승
+    trim = Column(String)  # 트림: 어스, GT-Line, 마스터즈 그래비티
     fuel_type = Column(String)
     transmission = Column(String)
     displacement = Column(Integer)  # 배기량 (cc 단위)
