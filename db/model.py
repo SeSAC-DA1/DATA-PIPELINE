@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint, Text, Boolean, DateTime, JSON, Enum, SmallInteger
+from sqlalchemy import Column, String, Integer, ForeignKey, Index, UniqueConstraint, Text, Boolean, DateTime, JSON, Enum, SmallInteger, Float
 from sqlalchemy.ext.declarative import declarative_base
 from .connection import session_scope, Engine
 
@@ -191,6 +191,51 @@ class InspectionDetail(Base):
         Index('idx_detail_group', 'inspection_id', 'group_code'),
     )
 
+
+class GetchaReview(Base):
+    """Getcha 자동차 오너 리뷰 테이블"""
+    __tablename__ = 'getcha_reviews'
+    
+    review_id = Column(Integer, primary_key=True, autoincrement=True)
+    id_contents = Column(Integer, unique=True, nullable=False)  # getcha 게시물 ID (중복 방지용)
+    
+    # 기본 리뷰 정보
+    title = Column(String(500), nullable=False)
+    created = Column(String(20))  # YYYY-MM-DDTHH:MM:SS 형식
+    
+    # 차량 정보 (다른 테이블과 명칭 통일)
+    manufacturer = Column(String(50))  # 제조사 (현대, 기아, BMW 등)
+    model_group = Column(String(100))  # 모델그룹 (EV4, 그랜저, GV70 등)
+    grade = Column(String(100))  # 등급 (롱레인지 어스, 시그니처 등)
+    model_year = Column(Integer)  # 연식
+    price = Column(Integer)  # 최종 거래가
+    
+    # 평가 항목별 평점 (1.0 ~ 5.0)
+    rating_total = Column(Float)  # 총점
+    rating_design = Column(Float)  # 디자인
+    rating_performance = Column(Float)  # 성능
+    rating_option = Column(Float)  # 옵션
+    rating_maintenance = Column(Float)  # 유지관리
+    
+    # 평가 항목별 코멘트
+    comment_total = Column(Text)  # 총평
+    comment_design = Column(Text)  # 디자인 코멘트
+    comment_performance = Column(Text)  # 성능 코멘트
+    comment_option = Column(Text)  # 옵션 코멘트
+    comment_maintenance = Column(Text)  # 유지관리 코멘트
+    
+    # 크롤링 메타 정보
+    crawled_at = Column(DateTime)
+    
+    __table_args__ = (
+        Index('idx_getcha_review_contents_id', 'id_contents'),
+        Index('idx_getcha_review_manufacturer', 'manufacturer'),
+        Index('idx_getcha_review_model', 'model_group'),
+        Index('idx_getcha_review_year', 'model_year'),
+        Index('idx_getcha_review_created', 'created'),
+        Index('idx_getcha_review_rating', 'rating_total'),
+    )
+
 # =============================================================================
 # DB 관리 함수들
 # =============================================================================
@@ -229,12 +274,17 @@ def check_database_status():
             inspection_count = session.query(Inspection).count()
             print(f"[DB 상태] Inspection 테이블: {inspection_count:,}건")
             
+            # GetchaReview 테이블 확인
+            getcha_review_count = session.query(GetchaReview).count()
+            print(f"[DB 상태] GetchaReview 테이블: {getcha_review_count:,}건")
+            
             return {
                 'vehicle_count': vehicle_count,
                 'option_master_count': option_master_count,
                 'vehicle_option_count': vehicle_option_count,
                 'insurance_history_count': insurance_history_count,
-                'inspection_count': inspection_count
+                'inspection_count': inspection_count,
+                'getcha_review_count': getcha_review_count
             }
     except Exception as e:
         print(f"[DB 상태 확인 실패] {e}")
