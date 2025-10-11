@@ -532,13 +532,20 @@ def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] =
             except Exception as e:
                 print(f"[쿠키 갱신 오류] carSeq={car_seq}: {e}")
 
-        # 신차가격 파싱
+        # 신차가격 및 carHistorySeq 파싱
         scripts_text = "\n".join(s.get_text() for s in soup.find_all("script"))
         newcar_price: Optional[int] = None
+        car_history_seq: Optional[str] = None
+        
         m = re.search(r"var\s+newcarPrice\s*=\s*['\"](\d+)['\"]", scripts_text)
         if m:
             base = int(m.group(1))
             newcar_price = int(base * 1.1)
+        
+        # carHistorySeq 추출 (보험이력용)
+        m_history = re.search(r'carHistorySeq["\s:=]+(\d+)', scripts_text)
+        if m_history:
+            car_history_seq = m_history.group(1)
 
         # 배기량 파싱 (cc 단위로 변환)
         displacement_str = kv.get("배기량", "") or kv.get("엔진", "")
@@ -561,6 +568,7 @@ def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] =
             "displacement": displacement,
             "image_url": image_url or "",
             "newcar_price": newcar_price,
+            "car_history_seq": car_history_seq,  # 보험이력용
         }, s
     except Exception as e:
         print(f"[HTML 파싱 오류] carSeq: {car_seq}: {e}")
@@ -862,13 +870,14 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
         return len(vehicle_bulk_data), skipped_count, options_saved_count
 
 # =============================================================================
-# 6. 통합 크롤링 (차량 정보 + 옵션)
+# 6. 통합 크롤링 (차량 정보 + 옵션 + 보험이력)
 # =============================================================================
 
-def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Optional[requests.Session] = None) -> List[Dict[str, Any]]:
-    """차량 정보 + 옵션 정보를 크롤링합니다."""
-    print(f"[차량 정보 크롤링 시작] 총 {len(car_seqs)}대")
+def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Optional[requests.Session] = None, crawl_insurance: bool = True) -> List[Dict[str, Any]]:
+    """차량별 완전한 정보 크롤링 (기본정보 + 옵션 + 보험이력)"""
+    print(f"[차량 정보 크롤링 시작] 총 {len(car_seqs)}대 (보험이력: {'포함' if crawl_insurance else '제외'})")
     s = session or build_session()
+    insurance_session_valid = False  # 보험이력 로그인 상태
 
     print("[제조사 정보 수집 중...]")
     makers = get_maker_info(session=s)
@@ -888,18 +897,71 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
         api_data = by_seq.get(str(seq), {})
         print(f"\n[{i}/{len(car_seqs)}] carSeq: {seq} 처리 중...")
 
+        # 1. HTML 파싱 (carHistorySeq 포함)
         html_data, s = get_car_detail_from_html(str(seq), session=s)
+        
+        # 2. 옵션 크롤링
         options = get_car_options_from_html(str(seq), s)
         
+        # 3. 차량 레코드 생성
         record = create_vehicle_record(api_data, html_data, maker_info)
         record['options'] = options
         complete_records.append(record)
 
         print(
-            f"   [완료] {record['manufacturer']} {record['model_group']} {record['model']} | "
+            f"   [차량정보] {record['manufacturer']} {record['model_group']} {record['model']} | "
             f"가격: {record['price']}만원, 주행거리: {record['distance']:,}km, "
             f"이미지: {'OK' if record['photo'] else 'NO PHOTO'}, 옵션: {len(options)}개"
         )
+        
+        # 4. 보험이력 크롤링 (선택적)
+        if crawl_insurance:
+            car_history_seq = html_data.get('car_history_seq')
+            
+            if not car_history_seq:
+                print(f"   [보험이력] carHistorySeq를 찾을 수 없음, 스킵")
+            else:
+                # 보험이력 로그인 체크
+                if not insurance_session_valid:
+                    print(f"   [보험이력] 네이버 SNS 로그인 중...")
+                    try:
+                        driver = login_with_naver_via_insurance(str(seq))
+                        if driver:
+                            cookies = extract_cookies_from_driver(driver)
+                            apply_cookies_to_session(s, cookies)
+                            driver.quit()
+                            insurance_session_valid = True
+                            print(f"   [보험이력] 로그인 성공 ✓")
+                        else:
+                            print(f"   [보험이력] 로그인 실패, 보험이력 크롤링 스킵")
+                    except Exception as e:
+                        print(f"   [보험이력 로그인 오류] {e}")
+                
+                # 보험이력 크롤링 시도
+                if insurance_session_valid:
+                    try:
+                        # get_insurance_history_with_session_direct 사용 (carHistorySeq 직접 전달)
+                        insurance_data = get_insurance_history_with_car_history_seq(
+                            car_seq=str(seq),
+                            car_history_seq=car_history_seq,
+                            session=s
+                        )
+                        
+                        if insurance_data:
+                            # DB에 저장
+                            saved = save_insurance_history_to_db([insurance_data])
+                            if saved > 0:
+                                print(f"   [보험이력] 저장 완료: 사고 {insurance_data['total_accident_cnt']}건")
+                            else:
+                                print(f"   [보험이력] 이미 존재하거나 저장 실패")
+                        else:
+                            # 세션 만료 가능성
+                            print(f"   [보험이력] 데이터 없음 (세션 만료 가능성)")
+                            insurance_session_valid = False
+                            
+                    except Exception as e:
+                        print(f"   [보험이력 오류] {e}")
+                        insurance_session_valid = False
 
         if i < len(car_seqs):
             time.sleep(delay)
@@ -908,99 +970,26 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
     return complete_records
 
 # =============================================================================
-# 7. 옵션 전용 크롤링 (기존 차량 대상)
-# =============================================================================
-
-def crawl_options_for_existing_vehicles(batch_size: int = 50, delay: float = 0.5):
-    """옵션 상태가 미확인인 차량들의 옵션 정보만 크롤링"""
-    
-    with session_scope() as db_session:
-        # 옵션 상태가 미확인인 차량들만 조회
-        vehicles_without_options = db_session.query(Vehicle).filter(
-            Vehicle.platform == 'kb_chachacha',
-            Vehicle.has_options.is_(None)  
-        ).all()
-        
-        print(f"[옵션 크롤링 대상] {len(vehicles_without_options)}대")
-        
-        if not vehicles_without_options:
-            print("[옵션 크롤링 완료] 모든 차량의 옵션 정보가 이미 있습니다.")
-            return
-    
-    total_processed = 0
-    requests_session = build_session()  # requests 세션
-    
-    for i in range(0, len(vehicles_without_options), batch_size):
-        batch = vehicles_without_options[i:i + batch_size]
-        processed = crawl_options_batch(batch, requests_session, delay)
-        total_processed += processed
-        
-        print(f"[옵션 크롤링 진행] {i + len(batch)}/{len(vehicles_without_options)} 완료 (이번 배치: {processed}대)")
-        time.sleep(1)
-    
-    print(f"[옵션 크롤링 완료] 총 {total_processed}대 처리")
-
-def crawl_options_batch(vehicles: List[Vehicle], requests_session: requests.Session, delay: float = 0.5) -> int:
-    """차량 배치의 옵션 정보 크롤링 (배치 처리 방식)"""
-    processed_count = 0
-    vehicles_options = []  # 배치 데이터 수집
-    vehicles_with_options = []  # 옵션이 있는 차량들
-    vehicles_without_options = []  # 옵션이 없는 차량들
-    
-    # 1단계: 모든 차량의 옵션 크롤링
-    for vehicle in vehicles:
-        try:
-            options = get_car_options_from_html(str(vehicle.car_seq), requests_session)
-            
-            if options:  # 옵션이 있는 경우
-                vehicles_options.append({
-                    'vehicle_id': vehicle.vehicle_id,
-                    'options': options
-                })
-                vehicles_with_options.append(vehicle.vehicle_id)
-                processed_count += 1
-            else:  # 옵션이 없는 경우
-                vehicles_without_options.append(vehicle.vehicle_id)
-            
-        except Exception as e:
-            print(f"[옵션 크롤링 실패] car_seq: {vehicle.car_seq}: {e}")
-        
-        time.sleep(delay)
-    
-    # 2단계: 배치로 DB 저장
-    if vehicles_options:
-        total_saved = save_vehicle_options_batch(vehicles_options)
-        print(f"[배치 저장 완료] {len(vehicles_options)}대 차량, {total_saved}개 옵션 저장")
-    
-    # 3단계: has_options 플래그 업데이트
-    with session_scope() as session:
-        # 옵션이 있는 차량들
-        if vehicles_with_options:
-            session.query(Vehicle).filter(
-                Vehicle.vehicle_id.in_(vehicles_with_options)
-            ).update({Vehicle.has_options: True}, synchronize_session=False)
-        
-        # 옵션이 없는 차량들
-        if vehicles_without_options:
-            session.query(Vehicle).filter(
-                Vehicle.vehicle_id.in_(vehicles_without_options)
-            ).update({Vehicle.has_options: False}, synchronize_session=False)
-        
-        session.commit()
-        print(f"[플래그 업데이트] 옵션 있음: {len(vehicles_with_options)}대, 옵션 없음: {len(vehicles_without_options)}대")
-    
-    return processed_count
-
-# =============================================================================
-# 8. 메인 크롤링 전략 (제조사별, 클래스별)
+# 7. 메인 크롤링 전략 (제조사별, 클래스별)
 # =============================================================================
 
 def crawl_kb_chachacha():
-    """스마트 크롤링 전략"""
+    """KB 차차차 통합 크롤러 (차량 정보 + 옵션 + 보험이력)"""
+    
+    # 1. DB 초기화
+    print("[KB차차차 통합 크롤링 시작]")
+    create_tables_if_not_exist()
+    
+    db_status = check_database_status()
+    if not db_status:
+        print("[DB 연결 실패] 데이터베이스 연결을 확인해주세요.")
+        return 0
+    
+    # 2. 크롤링 시작
     total_processed = 0
     session = build_session()
     
-    print("[전체 차량 수 확인 중...]")
+    print("\n[전체 차량 수 확인 중...]")
     total_count = get_total_car_count(session)
     print(f"전체 차량 수: {total_count:,}대")
     
@@ -1070,104 +1059,6 @@ def crawl_kb_chachacha():
     
     print(f"\n[전체 크롤링 완료] 총 {total_processed:,}건 처리됨")
     return total_processed
-
-# =============================================================================
-# 9. 통계 및 유틸리티
-# =============================================================================
-
-def check_vehicles_without_options() -> int:
-    """옵션 상태가 미확인인 차량 수를 확인합니다."""
-    with session_scope() as session:
-        count = session.query(Vehicle).filter(
-            Vehicle.platform == 'kb_chachacha',
-            Vehicle.has_options.is_(None)  # 옵션 상태가 미확인인 차량
-        ).count()
-        return count
-
-def get_vehicles_without_options_details() -> List[Dict[str, Any]]:
-    """옵션 상태가 미확인인 차량들의 상세 정보를 반환합니다."""
-    with session_scope() as session:
-        vehicles = session.query(Vehicle).filter(
-            Vehicle.platform == 'kb_chachacha',
-            Vehicle.has_options.is_(None)  # 옵션 상태가 미확인인 차량
-        ).limit(10).all()  # 샘플로 10개만 조회
-        
-        result = []
-        for vehicle in vehicles:
-            result.append({
-                'carseq': vehicle.car_seq,
-                'manufacturer': vehicle.manufacturer,
-                'model_group': vehicle.model_group,
-                'model': vehicle.model,
-                'price': vehicle.price,
-                'year': vehicle.model_year
-            })
-        return result
-
-def crawl_options_only():
-    """옵션 크롤링만 실행"""
-    print("[옵션 크롤링 시작]")
-    
-    print("[옵션 사전 초기화]")
-    initialize_global_options()
-    
-    print("[기존 차량 옵션 크롤링]")
-    crawl_options_for_existing_vehicles(batch_size=100, delay=0.5)
-    
-    print("[옵션 크롤링 완료]")
-
-# =============================================================================
-# 10. 메인 실행 함수
-# =============================================================================
-
-def crawl_kb_chachacha_with_options():
-    """옵션 크롤링을 먼저 실행한 후 통합 크롤링을 실행합니다."""
-    print("[KB차차차 통합 크롤링 시작]")
-    
-    # 1. DB 테이블 생성 확인
-    create_tables_if_not_exist()
-    
-    # 2. DB 상태 확인
-    db_status = check_database_status()
-    if not db_status:
-        print("[DB 연결 실패] 데이터베이스 연결을 확인해주세요.")
-        return
-    
-    # 3. 옵션 상태 미확인 차량 확인
-    vehicles_without_options = check_vehicles_without_options()
-    print(f"[옵션 상태 확인] 옵션 상태 미확인 차량: {vehicles_without_options:,}대")
-    
-    # 옵션 상태 미확인 차량들의 샘플 정보 표시
-    if vehicles_without_options > 0:
-        sample_vehicles = get_vehicles_without_options_details()
-        print(f"[옵션 상태 미확인 차량 샘플] (최대 10대):")
-        for vehicle in sample_vehicles:
-            print(f"  - {vehicle['manufacturer']} {vehicle['model_group']} {vehicle['model']} "
-                  f"(carSeq: {vehicle['carseq']}, 가격: {vehicle['price']}만원, 연식: {vehicle['year']})")
-    
-    # 4. 옵션 상태 미확인 차량이 있으면 옵션 크롤링 먼저 실행
-    if vehicles_without_options > 0:
-        print(f"[옵션 크롤링 필요] {vehicles_without_options:,}대의 옵션 정보를 먼저 크롤링합니다.")
-        crawl_options_only()
-        
-        # 옵션 크롤링 후 다시 확인
-        remaining = check_vehicles_without_options()
-        print(f"[옵션 크롤링 완료] 남은 차량: {remaining:,}대")
-    else:
-        print("[옵션 크롤링 불필요] 모든 차량의 옵션 상태가 이미 확인되었습니다.")
-    
-    # 5. 통합 크롤링 실행 (새로운 차량들)
-    print("[통합 크롤링 시작]")
-    total_processed = crawl_kb_chachacha()
-    
-    if total_processed > 0:
-        print(f"[전체 크롤링 성공] 총 {total_processed:,}건 처리 완료")
-    else:
-        print("[크롤링 완료] 새로운 차량이 없습니다.")
-
-# =============================================================================
-# 메인 실행
-# =============================================================================
 
 def convert_chacha_inspection_to_record(html_content: str, vehicle_id: int) -> Optional[Dict]:
     """차차차 검사 HTML을 Inspection 레코드로 변환"""
@@ -1522,7 +1413,7 @@ def save_inspection_to_db(inspection_records: List[Dict]):
         return 0
 
 # =============================================================================
-# 11. 보험이력 크롤링
+# 8. 네이버 SNS 로그인
 # =============================================================================
 
 def extract_cookies_from_driver(driver: webdriver.Chrome) -> List[Dict[str, Any]]:
@@ -1541,42 +1432,20 @@ def apply_cookies_to_session(session: requests.Session, cookies: List[Dict[str, 
         )
     print(f"[쿠키 적용] {len(cookies)}개 쿠키를 requests 세션에 적용")
 
-def get_insurance_history_with_session(car_seq: str, session: requests.Session) -> Optional[Dict[str, Any]]:
-    """로그인된 requests 세션으로 보험이력 조회"""
+# =============================================================================
+# 9. 보험이력 데이터 추출
+# =============================================================================
+
+def get_insurance_history_with_car_history_seq(car_seq: str, car_history_seq: str, session: requests.Session) -> Optional[Dict[str, Any]]:
+    """로그인된 세션으로 보험이력 조회 및 파싱"""
     try:
-        # 보험이력 HTML 페이지 요청
-        print(f"[보험이력] carSeq={car_seq} 보험이력 조회...")
-        
-        # 먼저 차량 상세 페이지에서 carHistorySeq 추출 필요
-        # 임시로 빈 값으로 시도하거나, 상세 페이지를 먼저 가져와야 함
-        detail_response = session.get(f"{DETAIL_URL}?carSeq={car_seq}", timeout=15)
-        
-        # HTML에서 carHistorySeq 추출
-        detail_soup = BeautifulSoup(detail_response.text, 'html.parser')
-        car_history_seq = None
-        
-        # JavaScript 변수나 data 속성에서 carHistorySeq 찾기
-        scripts = detail_soup.find_all('script')
-        for script in scripts:
-            if script.string and 'carHistorySeq' in script.string:
-                # carHistorySeq 값 추출 시도
-                import re
-                match = re.search(r'carHistorySeq["\s:=]+(\d+)', script.string)
-                if match:
-                    car_history_seq = match.group(1)
-                    break
-        
-        print(f"[보험이력] carHistorySeq: {car_history_seq}")
-        
         # POST 데이터 구성
         post_data = {
             "layerId": "layerCarHistoryInfo",
-            "refGbn": "331100",  # 고정값 (차량 참조 구분)
+            "carHistorySeq": car_history_seq,
+            "refGbn": "331100",
             "refSeq": car_seq
         }
-        
-        if car_history_seq:
-            post_data["carHistorySeq"] = car_history_seq
         
         info_response = session.post(
             INSURANCE_HISTORY_INFO_URL,
@@ -1842,8 +1711,12 @@ def get_insurance_history_with_session(car_seq: str, session: requests.Session) 
         print(f"[보험이력 오류] carSeq={car_seq}: {e}")
         return None
 
+# =============================================================================
+# 10. 보험이력 배치 크롤링 (독립 실행용)
+# =============================================================================
+
 def crawl_insurance_history_batch(car_seqs: List[str] = None, limit: int = None) -> List[Dict[str, Any]]:
-    """쿠키 추출 + Requests 방식으로 보험이력 일괄 크롤링"""
+    """보험이력 배치 크롤링 (테스트 또는 독립 실행용)"""
     
     # car_seqs가 없으면 DB에서 조회
     if not car_seqs:
@@ -1887,7 +1760,21 @@ def crawl_insurance_history_batch(car_seqs: List[str] = None, limit: int = None)
         for i, car_seq in enumerate(car_seqs, 1):
             print(f"\n[{i}/{len(car_seqs)}] carSeq={car_seq} 처리 중...")
             
-            insurance_data = get_insurance_history_with_session(car_seq, session)
+            # carHistorySeq 추출
+            detail_response = session.get(f"{DETAIL_URL}?carSeq={car_seq}", timeout=15)
+            detail_soup = BeautifulSoup(detail_response.text, 'html.parser')
+            scripts_text = "\n".join(s.get_text() for s in detail_soup.find_all("script"))
+            
+            car_history_seq = None
+            m_history = re.search(r'carHistorySeq["\s:=]+(\d+)', scripts_text)
+            if m_history:
+                car_history_seq = m_history.group(1)
+            
+            if not car_history_seq:
+                print(f"  [경고] carHistorySeq를 찾을 수 없음")
+                continue
+            
+            insurance_data = get_insurance_history_with_car_history_seq(car_seq, car_history_seq, session)
             
             if insurance_data:
                 results.append(insurance_data)
@@ -1918,8 +1805,12 @@ def crawl_insurance_history_batch(car_seqs: List[str] = None, limit: int = None)
         driver.quit()
         print("[보험이력 크롤링] Selenium 브라우저 종료")
 
+# =============================================================================
+# 11. 보험이력 DB 저장
+# =============================================================================
+
 def save_insurance_history_to_db(insurance_data_list: List[Dict[str, Any]]) -> int:
-    """보험이력 데이터를 DB에 저장 (이미 있으면 스킵)"""
+    """보험이력 데이터를 DB에 저장 (중복 시 스킵)"""
     saved_count = 0
     
     with session_scope() as db_session:
@@ -1990,11 +1881,22 @@ def save_insurance_history_to_db(insurance_data_list: List[Dict[str, Any]]) -> i
     
     return saved_count
 
+# =============================================================================
+# 12. 메인 실행
+# =============================================================================
+
 if __name__ == "__main__":
-    print("KB 차차차 크롤러 시작")
+    print("="*80)
+    print("KB 차차차 통합 크롤러 (차량 정보 + 옵션 + 보험이력)")
+    print("="*80)
     try:
-        crawl_kb_chachacha_with_options()
+        total = crawl_kb_chachacha()
+        print(f"\n{'='*80}")
+        print(f"✅ 크롤링 완료: 총 {total:,}건 처리")
+        print(f"{'='*80}")
+    except KeyboardInterrupt:
+        print("\n\n[중단] 사용자가 크롤링을 중단했습니다.")
     except Exception as e:
-        print(f"크롤러 실행 중 오류 발생: {e}")
+        print(f"\n[오류] 크롤러 실행 중 오류 발생: {e}")
         import traceback
         traceback.print_exc()
