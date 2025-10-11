@@ -4,6 +4,7 @@ from .connection import session_scope, Engine
 
 Base = declarative_base()
 
+#차량 정보
 class Vehicle(Base):
     __tablename__ = 'vehicles'
     
@@ -33,6 +34,7 @@ class Vehicle(Base):
     photo = Column(String)
     has_options = Column(Boolean, default=None)  # NULL: 미확인, TRUE: 옵션 있음, FALSE: 옵션 없음
 
+#옵션 사전
 class OptionMaster(Base):
     __tablename__ = 'option_masters'
     
@@ -49,6 +51,7 @@ class OptionMaster(Base):
         Index('idx_option_name', 'option_name'),
     )
 
+#차량 옵션
 class VehicleOption(Base):
     __tablename__ = 'vehicle_options'
     

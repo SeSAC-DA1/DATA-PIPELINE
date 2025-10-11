@@ -3,6 +3,10 @@ from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from dotenv import load_dotenv
+
+# 환경변수 로드
+load_dotenv()
 
 # 프로젝트 루트 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -10,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # DB 관련
 from db.connection import session_scope
 from db.model import (
-    Vehicle, OptionMaster, VehicleOption, Inspection,
+    Vehicle, OptionMaster, VehicleOption, Inspection, InsuranceHistory,
     create_tables_if_not_exist, check_database_status
 )
 
@@ -35,6 +39,8 @@ MAKER_URL = f"{KB_HOST}/public/search/carMaker.json?page=1&sort=-orderDate"
 API_RECENT_URL = f"{KB_HOST}/public/car/common/recent/car/list.json"
 OPTION_LAYER_URL = f"{KB_HOST}/public/layer/car/option/list.kbc"
 OPTION_MASTER_URL = f"{KB_HOST}/public/car/option/code/list.json"
+INSURANCE_HISTORY_CHECK_URL = f"{KB_HOST}/public/layer/car/history/info/check.json"
+INSURANCE_HISTORY_INFO_URL = f"{KB_HOST}/public/car/layer/member/car/history/info.kbc"
 
 # =============================================================================
 # 1. 세션 관리 및 유틸리티
@@ -67,6 +73,130 @@ def get_cookies_from_selenium(car_seq: str) -> str:
         
     finally:
         driver.quit()
+
+def login_with_naver_via_insurance(car_seq: str) -> Optional[webdriver.Chrome]:
+    """보험이력 조회 팝업을 통한 네이버 SNS 로그인 (키보드 보안 프로그램 없음)"""
+    naver_id = os.getenv('NAVER_ID')
+    naver_password = os.getenv('NAVER_PASSWORD')
+    
+    if not naver_id or not naver_password:
+        print("[로그인 오류] .env 파일에 NAVER_ID와 NAVER_PASSWORD를 설정해주세요.")
+        return None
+    
+    options = Options()
+    # options.add_argument('--headless=new')  # 디버깅 시에는 주석 처리
+    
+    # 자동화 탐지 우회 옵션
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    driver = webdriver.Chrome(options=options)
+    
+    # WebDriver 속성 숨기기
+    driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+        'source': '''
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            })
+        '''
+    })
+    
+    try:
+        # 1. 차량 상세 페이지로 이동
+        print(f"[SNS 로그인] 차량 상세 페이지 이동 (carSeq={car_seq})...")
+        driver.get(f"{DETAIL_URL}?carSeq={car_seq}")
+        
+        # 챌린지 통과 대기 (로봇 체크 자동 통과)
+        print("[SNS 로그인] 챌린지 통과 대기 중...")
+        try:
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "detail-info-table"))
+            )
+            print("[SNS 로그인] 챌린지 통과 완료")
+        except:
+            print("[SNS 로그인] 챌린지 통과 시간 초과, 계속 진행...")
+        
+        time.sleep(1)
+        
+        # 2. 보험이력 버튼 클릭 (이때 SNS 로그인 팝업이 자동으로 뜸)
+        print("[SNS 로그인] 보험이력 버튼 클릭...")
+        try:
+            insurance_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "btnCarHistoryView1"))
+            )
+            print("[SNS 로그인] 보험이력 버튼 발견")
+            insurance_btn.click()
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"[SNS 로그인] 보험이력 버튼 클릭 실패: {e}")
+            driver.quit()
+            return None
+        
+        # 3. SNS 로그인 팝업에서 네이버 버튼 클릭
+        print("[SNS 로그인] SNS 로그인 팝업에서 네이버 버튼 찾는 중...")
+        try:
+            # 네이버 로그인 버튼 클릭 (정확한 셀렉터)
+            naver_btn = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "a.sns-login__link-naver"))
+            )
+            print("[SNS 로그인] 네이버 SNS 로그인 버튼 클릭")
+            naver_btn.click()
+            time.sleep(2)
+                
+        except Exception as e:
+            print(f"[SNS 로그인] 네이버 버튼 찾기 실패: {e}")
+            driver.quit()
+            return None
+        
+        # 4. 네이버 로그인 창으로 전환
+        print("[SNS 로그인] 네이버 로그인 창 전환...")
+        original_window = driver.current_window_handle
+        
+        # 새 창 대기
+        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
+        
+        for window in driver.window_handles:
+            if window != original_window:
+                driver.switch_to.window(window)
+                break
+        
+        # 5. 네이버 아이디/비밀번호 입력
+        print("[SNS 로그인] 네이버 아이디/비밀번호 입력...")
+        try:
+            id_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "id"))
+            )
+            
+            # JavaScript로 입력
+            driver.execute_script(f"document.getElementById('id').value = '{naver_id}';")
+            driver.execute_script(f"document.getElementById('pw').value = '{naver_password}';")
+            
+            # 로그인 버튼 클릭
+            print("[SNS 로그인] 네이버 로그인 실행...")
+            login_submit = driver.find_element(By.ID, "log.login")
+            login_submit.click()
+            time.sleep(3)
+            
+        except Exception as e:
+            print(f"[SNS 로그인] 네이버 로그인 실패: {e}")
+            driver.quit()
+            return None
+        
+        # 6. 원래 창으로 돌아가기
+        driver.switch_to.window(original_window)
+        time.sleep(2)
+        
+        print("[SNS 로그인] ✅ 로그인 성공!")
+        return driver
+            
+    except Exception as e:
+        print(f"[SNS 로그인 오류] {e}")
+        import traceback
+        traceback.print_exc()
+        driver.quit()
+        return None
 
 def build_session() -> requests.Session:
     """세션 생성 및 설정"""
@@ -644,6 +774,7 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
                 'trim': record.get('trim'),
                 'fuel_type': record.get('fuel_type'),
                 'transmission': record.get('transmission'),
+                'displacement': int(record.get('displacement', 0)),
                 'color_name': record.get('color_name'),
                 'model_year': int(record.get('model_year', 0)),
                 'first_registration_date': int(record.get('first_registration_date', 0)),
@@ -675,14 +806,13 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
         if not vehicle_bulk_data:
             return 0, skipped_count, 0
         
-        # 2. 차량 정보 일괄 저장
-        session.bulk_insert_mappings(Vehicle, vehicle_bulk_data)
+        # 2. 차량 정보 일괄 저장 (ORM 객체로 변경)
+        vehicle_objects = [Vehicle(**v) for v in vehicle_bulk_data]
+        session.bulk_save_objects(vehicle_objects, return_defaults=True)
         session.flush()
         
-        # 3. 저장된 차량들의 ID 조회
-        car_seqs = [v['car_seq'] for v in vehicle_bulk_data]
-        saved_vehicles = session.query(Vehicle).filter(Vehicle.car_seq.in_(car_seqs)).all()
-        vehicle_id_map = {v.car_seq: v.vehicle_id for v in saved_vehicles}
+        # 3. 저장된 차량들의 ID 매핑 (ORM 객체에서 직접 가져오기)
+        vehicle_id_map = {v.car_seq: v.vehicle_id for v in vehicle_objects}
         
         # 4. has_options 플래그 업데이트
         vehicles_with_options = []
@@ -1042,8 +1172,6 @@ def crawl_kb_chachacha_with_options():
 def convert_chacha_inspection_to_record(html_content: str, vehicle_id: int) -> Optional[Dict]:
     """차차차 검사 HTML을 Inspection 레코드로 변환"""
     try:
-        from bs4 import BeautifulSoup
-        
         soup = BeautifulSoup(html_content, 'html.parser')
         
         # 기본 정보 추출
@@ -1392,6 +1520,475 @@ def save_inspection_to_db(inspection_records: List[Dict]):
     except Exception as e:
         print(f"  [검사 이력 저장 오류] {e}")
         return 0
+
+# =============================================================================
+# 11. 보험이력 크롤링
+# =============================================================================
+
+def extract_cookies_from_driver(driver: webdriver.Chrome) -> List[Dict[str, Any]]:
+    """Selenium 드라이버에서 쿠키 추출"""
+    cookies = driver.get_cookies()
+    print(f"[쿠키 추출] {len(cookies)}개 쿠키 추출 완료")
+    return cookies
+
+def apply_cookies_to_session(session: requests.Session, cookies: List[Dict[str, Any]]) -> None:
+    """Requests 세션에 쿠키 적용"""
+    for cookie in cookies:
+        session.cookies.set(
+            cookie['name'], 
+            cookie['value'], 
+            domain=cookie.get('domain', '.kbchachacha.com')
+        )
+    print(f"[쿠키 적용] {len(cookies)}개 쿠키를 requests 세션에 적용")
+
+def get_insurance_history_with_session(car_seq: str, session: requests.Session) -> Optional[Dict[str, Any]]:
+    """로그인된 requests 세션으로 보험이력 조회"""
+    try:
+        # 보험이력 HTML 페이지 요청
+        print(f"[보험이력] carSeq={car_seq} 보험이력 조회...")
+        
+        # 먼저 차량 상세 페이지에서 carHistorySeq 추출 필요
+        # 임시로 빈 값으로 시도하거나, 상세 페이지를 먼저 가져와야 함
+        detail_response = session.get(f"{DETAIL_URL}?carSeq={car_seq}", timeout=15)
+        
+        # HTML에서 carHistorySeq 추출
+        detail_soup = BeautifulSoup(detail_response.text, 'html.parser')
+        car_history_seq = None
+        
+        # JavaScript 변수나 data 속성에서 carHistorySeq 찾기
+        scripts = detail_soup.find_all('script')
+        for script in scripts:
+            if script.string and 'carHistorySeq' in script.string:
+                # carHistorySeq 값 추출 시도
+                import re
+                match = re.search(r'carHistorySeq["\s:=]+(\d+)', script.string)
+                if match:
+                    car_history_seq = match.group(1)
+                    break
+        
+        print(f"[보험이력] carHistorySeq: {car_history_seq}")
+        
+        # POST 데이터 구성
+        post_data = {
+            "layerId": "layerCarHistoryInfo",
+            "refGbn": "331100",  # 고정값 (차량 참조 구분)
+            "refSeq": car_seq
+        }
+        
+        if car_history_seq:
+            post_data["carHistorySeq"] = car_history_seq
+        
+        info_response = session.post(
+            INSURANCE_HISTORY_INFO_URL,
+            data=post_data,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br, zstd",
+                "Accept-Language": "ko,ko-KR;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Cache-Control": "max-age=0",
+                "Connection": "keep-alive",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": "www.kbchachacha.com",
+                "Origin": "https://www.kbchachacha.com",
+                "Referer": f"{DETAIL_URL}?carSeq={car_seq}&f=carhistory",
+                "Sec-Ch-Ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "iframe",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+            },
+            timeout=15
+        )
+        
+        if info_response.status_code != 200:
+            print(f"[보험이력] HTML 페이지 오류: {info_response.status_code}")
+            return None
+        
+        # HTML 파싱
+        soup = BeautifulSoup(info_response.text, 'html.parser')
+        
+        # 보험이력 데이터 추출 (InsuranceHistory 테이블 구조에 맞춤)
+        insurance_data = {
+            'car_seq': car_seq,
+            'platform': 'kb_chachacha',
+            
+            # 사고 이력 요약
+            'my_accident_cnt': 0,
+            'other_accident_cnt': 0,
+            'my_accident_cost': 0,
+            'other_accident_cost': 0,
+            'total_accident_cnt': 0,
+            
+            # 특수 사고 이력
+            'total_loss_cnt': 0,
+            'total_loss_date': None,
+            'robber_cnt': 0,
+            'robber_date': None,
+            'flood_total_loss_cnt': 0,
+            'flood_part_loss_cnt': 0,
+            'flood_date': None,
+            
+            # 기타 이력
+            'owner_change_cnt': 0,
+            'car_no_change_cnt': 0,
+            
+            # 특수 용도 이력
+            'government': 0,
+            'business': 0,
+            'rental': 0,
+            'loan': 0,
+            
+            # 미가입 기간
+            'not_join_periods': None,
+            
+            # 상세 이력 (JSON용)
+            'details': []
+        }
+        
+        # 1. 요약 정보 추출 (중고차 사고이력 정보 요약)
+        summary_list = soup.find('div', class_='acd-qk-list')
+        if summary_list:
+            items = summary_list.find_all('li')
+            for item in items:
+                tit = item.find('span', class_='tit')
+                txt = item.find('span', class_='txt')
+                
+                if not tit or not txt:
+                    continue
+                
+                tit_text = tit.get_text(strip=True)
+                txt_text = txt.get_text(strip=True)
+                
+                # 전손 보험사고
+                if '전손' in tit_text:
+                    if '있음' in txt_text:
+                        insurance_data['total_loss_cnt'] = 1
+                        # 날짜 추출 (있을 경우)
+                        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', txt_text)
+                        if date_match:
+                            insurance_data['total_loss_date'] = date_match.group(1)
+                
+                # 도난 보험사고
+                elif '도난' in tit_text:
+                    if '있음' in txt_text:
+                        insurance_data['robber_cnt'] = 1
+                        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', txt_text)
+                        if date_match:
+                            insurance_data['robber_date'] = date_match.group(1)
+                
+                # 침수 보험사고
+                elif '침수' in tit_text:
+                    if '있음' in txt_text:
+                        insurance_data['flood_part_loss_cnt'] = 1
+                        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', txt_text)
+                        if date_match:
+                            insurance_data['flood_date'] = date_match.group(1)
+                
+                # 내차 피해 (예: "2회/866,908원")
+                elif '내차 피해' in tit_text or '내차피해' in tit_text:
+                    if txt_text and txt_text != '없음':
+                        parts = txt_text.split('/')
+                        if len(parts) == 2:
+                            count_str = parts[0].replace('회', '').strip()
+                            if count_str.isdigit():
+                                insurance_data['my_accident_cnt'] = int(count_str)
+                            
+                            amount_str = parts[1].replace(',', '').replace('원', '').strip()
+                            if amount_str.isdigit():
+                                insurance_data['my_accident_cost'] = int(amount_str)
+                
+                # 상대차 피해 (예: "1회/497,905원")
+                elif '상대차 피해' in tit_text or '상대차피해' in tit_text:
+                    if txt_text and txt_text != '없음':
+                        parts = txt_text.split('/')
+                        if len(parts) == 2:
+                            count_str = parts[0].replace('회', '').strip()
+                            if count_str.isdigit():
+                                insurance_data['other_accident_cnt'] = int(count_str)
+                            
+                            amount_str = parts[1].replace(',', '').replace('원', '').strip()
+                            if amount_str.isdigit():
+                                insurance_data['other_accident_cost'] = int(amount_str)
+                
+                # 소유자 변경 (예: "6회")
+                elif '소유자 변경' in tit_text or '소유자변경' in tit_text:
+                    count_match = re.search(r'(\d+)\s*회', txt_text)
+                    if count_match:
+                        insurance_data['owner_change_cnt'] = int(count_match.group(1))
+                
+                # 차량번호 변경 (예: "2회")
+                elif '차량번호 변경' in tit_text or '차량번호변경' in tit_text:
+                    count_match = re.search(r'(\d+)\s*회', txt_text)
+                    if count_match:
+                        insurance_data['car_no_change_cnt'] = int(count_match.group(1))
+        
+        # 2. 특수 용도 이력 정보 추출
+        special_use_list = soup.find('div', class_='acd-qk-list tp02')
+        if special_use_list:
+            items = special_use_list.find_all('li')
+            for item in items:
+                tit = item.find('span', class_='tit')
+                txt = item.find('span', class_='txt')
+                
+                if not tit or not txt:
+                    continue
+                
+                tit_text = tit.get_text(strip=True)
+                txt_text = txt.get_text(strip=True)
+                
+                # 대여용도(렌터카)
+                if '대여' in tit_text or '렌터카' in tit_text:
+                    insurance_data['rental'] = 1 if '있음' in txt_text else 0
+                
+                # 영업용도
+                elif '영업' in tit_text:
+                    insurance_data['business'] = 1 if '있음' in txt_text else 0
+                
+                # 관용용도
+                elif '관용' in tit_text:
+                    insurance_data['government'] = 1 if '있음' in txt_text else 0
+        
+        # 3. 미가입 기간 추출
+        not_join_box = soup.find('div', class_='box-line')
+        if not_join_box:
+            date_divs = not_join_box.find_all('div', class_='date')
+            if date_divs:
+                periods = []
+                for date_div in date_divs:
+                    period = date_div.get_text(strip=True)
+                    if period:
+                        # "2019년06월~2020년09월" 형식을 "201906~202009"로 변환
+                        period = period.replace('년', '').replace('월', '')
+                        periods.append(period)
+                
+                if periods:
+                    insurance_data['not_join_periods'] = ', '.join(periods)
+        
+        # 총 사고 건수 계산
+        insurance_data['total_accident_cnt'] = insurance_data['my_accident_cnt'] + insurance_data['other_accident_cnt']
+        
+        # 상세 이력 추출 (보험사고이력 상세 정보)
+        detail_tables = soup.find_all('table', class_='table-l02')
+        
+        for table in detail_tables:
+            # 날짜 추출
+            date_header = table.find('thead').find_all('tr')[0] if table.find('thead') else None
+            if not date_header:
+                continue
+            
+            date_th = date_header.find('th')
+            if not date_th:
+                continue
+            
+            accident_date = date_th.get_text(strip=True)
+            
+            # 내차 사고/상대차 사고 데이터 추출
+            tbody = table.find('tbody')
+            if not tbody:
+                continue
+            
+            rows = tbody.find_all('tr')
+            
+            my_car_insurance = None
+            my_car_other = None
+            other_car_insurance = None
+            
+            for row in rows:
+                th = row.find('th')
+                td = row.find('td')
+                
+                if not th or not td:
+                    continue
+                
+                th_text = th.get_text(strip=True)
+                td_text = td.get_text(strip=True)
+                
+                # 금액 추출
+                amount_match = re.search(r'(\d{1,3}(?:,\d{3})*)\s*원', td_text)
+                amount = 0
+                if amount_match:
+                    amount_str = amount_match.group(1).replace(',', '')
+                    amount = int(amount_str)
+                
+                if '내 차 보험' in th_text and '내 차 사고' in str(table):
+                    my_car_insurance = amount
+                elif '상대 보험' in th_text and '내 차 사고' in str(table):
+                    my_car_other = amount
+                elif '내 차 보험' in th_text and '상대 차 사고' in str(table):
+                    other_car_insurance = amount
+            
+            # 상세 이력 추가
+            if my_car_insurance or my_car_other or other_car_insurance:
+                detail = {
+                    'date': accident_date,
+                    'my_car_insurance': my_car_insurance if my_car_insurance else 0,
+                    'my_car_other': my_car_other if my_car_other else 0,
+                    'other_car_insurance': other_car_insurance if other_car_insurance else 0,
+                }
+                insurance_data['details'].append(detail)
+        
+        total_cost = insurance_data['my_accident_cost'] + insurance_data['other_accident_cost']
+        print(f"[보험이력] 추출 완료:")
+        print(f"  - 사고: 내차{insurance_data['my_accident_cnt']}회, 상대차{insurance_data['other_accident_cnt']}회")
+        print(f"  - 특수용도: 렌터카{'O' if insurance_data['rental'] else 'X'}, 영업{'O' if insurance_data['business'] else 'X'}")
+        print(f"  - 소유자변경: {insurance_data['owner_change_cnt']}회")
+        return insurance_data
+        
+    except Exception as e:
+        print(f"[보험이력 오류] carSeq={car_seq}: {e}")
+        return None
+
+def crawl_insurance_history_batch(car_seqs: List[str] = None, limit: int = None) -> List[Dict[str, Any]]:
+    """쿠키 추출 + Requests 방식으로 보험이력 일괄 크롤링"""
+    
+    # car_seqs가 없으면 DB에서 조회
+    if not car_seqs:
+        with session_scope() as session:
+            query = session.query(Vehicle.car_seq).filter(
+                Vehicle.platform == 'kb_chachacha'
+            )
+            
+            if limit:
+                query = query.limit(limit)
+            
+            car_seqs = [str(row[0]) for row in query.all()]
+    
+    if not car_seqs:
+        print("[보험이력 크롤링] 크롤링할 차량이 없습니다.")
+        return []
+    
+    print(f"[보험이력 크롤링] 총 {len(car_seqs)}대 크롤링 시작...")
+    
+    # 1. Selenium으로 로그인하여 쿠키 획득
+    print(f"\n[1단계] Selenium으로 로그인하여 쿠키 획득...")
+    driver = login_with_naver_via_insurance(car_seqs[0])
+    
+    if not driver:
+        print("[보험이력 크롤링] 로그인 실패")
+        return []
+    
+    try:
+        # 쿠키 추출
+        cookies = extract_cookies_from_driver(driver)
+        
+        # 2. Requests 세션 생성 및 쿠키 적용
+        print(f"\n[2단계] Requests 세션에 쿠키 적용...")
+        session = build_session()
+        apply_cookies_to_session(session, cookies)
+        
+        # 3. 보험이력 크롤링
+        print(f"\n[3단계] 보험이력 데이터 크롤링...")
+        results = []
+        
+        for i, car_seq in enumerate(car_seqs, 1):
+            print(f"\n[{i}/{len(car_seqs)}] carSeq={car_seq} 처리 중...")
+            
+            insurance_data = get_insurance_history_with_session(car_seq, session)
+            
+            if insurance_data:
+                results.append(insurance_data)
+                print(f"  ✓ 성공: 사고건수={insurance_data['total_accident_cnt']}건")
+            else:
+                print(f"  ✗ 실패")
+            
+            # 딜레이
+            time.sleep(0.5)
+        
+        print(f"\n[보험이력 크롤링 완료] 총 {len(results)}건 수집")
+        
+        # 4. DB에 저장
+        if results:
+            print(f"\n[4단계] DB에 보험이력 저장...")
+            saved_count = save_insurance_history_to_db(results)
+            print(f"[DB 저장 완료] {saved_count}건 저장됨")
+        
+        # 결과를 JSON으로 저장
+        output_file = "insurance_history_results.json"
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
+        print(f"[JSON 저장] {output_file}에 저장 완료")
+        
+        return results
+        
+    finally:
+        driver.quit()
+        print("[보험이력 크롤링] Selenium 브라우저 종료")
+
+def save_insurance_history_to_db(insurance_data_list: List[Dict[str, Any]]) -> int:
+    """보험이력 데이터를 DB에 저장 (이미 있으면 스킵)"""
+    saved_count = 0
+    
+    with session_scope() as db_session:
+        for data in insurance_data_list:
+            car_seq = data['car_seq']
+            platform = data['platform']
+            
+            # vehicle_id 조회
+            vehicle = db_session.query(Vehicle).filter(
+                Vehicle.car_seq == car_seq,
+                Vehicle.platform == platform
+            ).first()
+            
+            if not vehicle:
+                print(f"  [경고] carSeq={car_seq} 차량 정보를 DB에서 찾을 수 없습니다. 스킵합니다.")
+                continue
+            
+            # 이미 보험이력이 있는지 확인
+            existing = db_session.query(InsuranceHistory).filter(
+                InsuranceHistory.vehicle_id == vehicle.vehicle_id,
+                InsuranceHistory.platform == platform
+            ).first()
+            
+            if existing:
+                print(f"  [스킵] carSeq={car_seq} (vehicle_id={vehicle.vehicle_id}) 보험이력이 이미 존재합니다.")
+                continue
+            
+            # 새로운 보험이력 레코드 생성
+            insurance_history = InsuranceHistory(
+                vehicle_id=vehicle.vehicle_id,
+                platform=platform,
+                
+                # 사고 이력 요약
+                my_accident_cnt=data.get('my_accident_cnt', 0),
+                other_accident_cnt=data.get('other_accident_cnt', 0),
+                my_accident_cost=data.get('my_accident_cost', 0),
+                other_accident_cost=data.get('other_accident_cost', 0),
+                total_accident_cnt=data.get('total_accident_cnt', 0),
+                
+                # 특수 사고 이력
+                total_loss_cnt=data.get('total_loss_cnt', 0),
+                total_loss_date=data.get('total_loss_date'),
+                robber_cnt=data.get('robber_cnt', 0),
+                robber_date=data.get('robber_date'),
+                flood_total_loss_cnt=data.get('flood_total_loss_cnt', 0),
+                flood_part_loss_cnt=data.get('flood_part_loss_cnt', 0),
+                flood_date=data.get('flood_date'),
+                
+                # 기타 이력
+                owner_change_cnt=data.get('owner_change_cnt', 0),
+                car_no_change_cnt=data.get('car_no_change_cnt', 0),
+                
+                # 특수 용도 이력
+                government=data.get('government', 0),
+                business=data.get('business', 0),
+                rental=data.get('rental', 0),
+                loan=data.get('loan', 0),
+                
+                # 미가입 기간
+                not_join_periods=data.get('not_join_periods')
+            )
+            
+            db_session.add(insurance_history)
+            saved_count += 1
+            print(f"  [저장] carSeq={car_seq} (vehicle_id={vehicle.vehicle_id}) 보험이력 저장 완료")
+        
+        db_session.commit()
+    
+    return saved_count
 
 if __name__ == "__main__":
     print("KB 차차차 크롤러 시작")
