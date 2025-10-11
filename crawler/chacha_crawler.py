@@ -46,31 +46,28 @@ INSURANCE_HISTORY_INFO_URL = f"{KB_HOST}/public/car/layer/member/car/history/inf
 # 1. 세션 관리 및 유틸리티
 # =============================================================================
 
-def get_cookies_from_selenium(car_seq: str) -> str:
-    """셀레니움으로 쿠키 자동 획득"""
+def get_cookies_from_selenium(car_seq: str) -> List[Dict[str, Any]]:
+    """셀레니움으로 쿠키 자동 획득 (헤드리스 모드)"""
     options = Options()
     options.add_argument('--headless=new')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
     driver = webdriver.Chrome(options=options)
-
+    
     try:
-        detail_url = f"{DETAIL_URL}?carSeq={car_seq}"
-        driver.get(detail_url)
-        
-        print(f"[챌린지 통과] carSeq: {car_seq}")
+        driver.get(f"{DETAIL_URL}?carSeq={car_seq}")
         try:
             WebDriverWait(driver, 30).until(
                 EC.presence_of_element_located((By.CLASS_NAME, "detail-info-table"))
             )
-            print("[챌린지 통과 완료]")
         except:
-            print("[챌린지 통과 시간 초과, 쿠키는 획득]")
+            pass
         
         cookies = driver.get_cookies()
-        cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
-        
         print(f"[새 쿠키 획득 완료] {len(cookies)}개")
-        return cookie_string
-        
+        return cookies
     finally:
         driver.quit()
 
@@ -84,7 +81,11 @@ def login_with_naver_via_insurance(car_seq: str) -> Optional[webdriver.Chrome]:
         return None
     
     options = Options()
-    # options.add_argument('--headless=new')  # 디버깅 시에는 주석 처리
+    options.add_argument('--headless=new')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
     
     # 자동화 탐지 우회 옵션
     options.add_argument('--disable-blink-features=AutomationControlled')
@@ -455,9 +456,15 @@ def crawl_car_seqs(maker_code: str = None, maker_name: str = None, class_code: s
 # 4. 상세 정보 크롤링 (HTML 파싱, 옵션 추출)
 # =============================================================================
 
-def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] = None) -> tuple[Dict[str, Any], requests.Session]:
-    """HTML에서 상세 정보를 파싱합니다."""
+def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] = None) -> tuple[Dict[str, Any], requests.Session, bool]:
+    """HTML에서 상세 정보를 파싱합니다.
+    
+    Returns:
+        (차량 정보, 세션, 쿠키_갱신_여부)
+    """
     s = session or build_session()
+    cookie_refreshed = False  # 쿠키 갱신 플래그
+    
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
@@ -511,28 +518,53 @@ def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] =
             print(f"[쿠키 갱신] carSeq={car_seq} - image_url 없음, 셀레니움으로 새 쿠키 획득 중...")
             
             try:
-                new_cookie_string = get_cookies_from_selenium(car_seq)
+                cookies = get_cookies_from_selenium(car_seq)
+                
+                # 기존 세션 버리고 새 세션 생성
+                s = build_session()
                 s.cookies.clear()
                 
-                for cookie in new_cookie_string.split('; '):
-                    if '=' in cookie:
-                        name, value = cookie.split('=', 1)
-                        s.cookies.set(name.strip(), value.strip(), domain='.kbchachacha.com')
+                # 도메인/경로 보존 + www/non-www 양쪽에 set
+                for c in cookies:
+                    name, value = c['name'], c['value']
+                    domain = c.get('domain') or 'kbchachacha.com'
+                    path = c.get('path') or '/'
+                    
+                    # 원본 그대로
+                    s.cookies.set(name, value, domain=domain, path=path, 
+                                 secure=c.get('secure', False), expires=c.get('expiry'))
+                    
+                    # www 보정 쿠키도 추가 (KB가 둘 다 쓰는 케이스 방지)
+                    if domain.lstrip('.').startswith('kbchachacha.com'):
+                        s.cookies.set(name, value, domain='www.kbchachacha.com', path=path, 
+                                     secure=c.get('secure', False), expires=c.get('expiry'))
                 
-                print(f"[재시도] carSeq={car_seq} - 새 쿠키로 상세페이지 재요청...")
+                cookie_refreshed = True  # 쿠키 갱신됨 (보험이력 로그인 무효화 필요)
+                
+                print(f"[재시도] carSeq={car_seq} - 새 세션 및 쿠키로 상세페이지 재요청...")
                 r = s.get(DETAIL_URL, params={"carSeq": car_seq}, headers=headers, timeout=15)
-                soup = BeautifulSoup(r.text, "html.parser")
+                soup = BeautifulSoup(r.text, "html.parser")  # soup 재생성
+                
+                # kv 테이블도 재파싱
+                kv = {}
+                for tr in soup.select(".detail-info-table tbody tr"):
+                    tds = tr.select("th,td")
+                    for i in range(0, len(tds), 2):
+                        k = tds[i].get_text(strip=True)
+                        v = tds[i + 1].get_text(strip=True) if i + 1 < len(tds) else ""
+                        kv[k] = v
+                
                 image_url = _pick_first_image_url(soup)
                 
                 if image_url:
-                    print(f"[쿠키 갱신 성공] carSeq={car_seq} - image_url 획득")
+                    print(f"[쿠키 갱신 성공] carSeq={car_seq} - image_url 획득 (새 세션 생성)")
                 else:
                     print(f"[쿠키 갱신 실패] carSeq={car_seq} - 여전히 image_url 없음")
                     
             except Exception as e:
                 print(f"[쿠키 갱신 오류] carSeq={car_seq}: {e}")
 
-        # 신차가격 및 carHistorySeq 파싱
+        # 신차가격 및 carHistorySeq 파싱 (최종 soup 사용)
         scripts_text = "\n".join(s.get_text() for s in soup.find_all("script"))
         newcar_price: Optional[int] = None
         car_history_seq: Optional[str] = None
@@ -546,6 +578,17 @@ def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] =
         m_history = re.search(r'carHistorySeq["\s:=]+(\d+)', scripts_text)
         if m_history:
             car_history_seq = m_history.group(1)
+        else:
+            # 디버깅: carHistorySeq가 scripts에 있는지 확인
+            if 'carHistorySeq' in scripts_text:
+                print(f"[디버깅] 'carHistorySeq' 문자열은 있지만 패턴 매칭 실패")
+                # 다른 패턴 시도
+                m_alt = re.search(r'carHistorySeq[\'\":\s]*[=:]\s*[\'\"]*(\d+)', scripts_text)
+                if m_alt:
+                    car_history_seq = m_alt.group(1)
+                    print(f"[디버깅] 대체 패턴으로 carHistorySeq 추출: {car_history_seq}")
+            else:
+                print(f"[디버깅] carSeq={car_seq} - 'carHistorySeq' 문자열 자체가 없음")
 
         # 배기량 파싱 (cc 단위로 변환)
         displacement_str = kv.get("배기량", "") or kv.get("엔진", "")
@@ -569,10 +612,10 @@ def get_car_detail_from_html(car_seq: str, session: Optional[requests.Session] =
             "image_url": image_url or "",
             "newcar_price": newcar_price,
             "car_history_seq": car_history_seq,  # 보험이력용
-        }, s
+        }, s, cookie_refreshed
     except Exception as e:
         print(f"[HTML 파싱 오류] carSeq: {car_seq}: {e}")
-        return {}, s
+        return {}, s, False
 
 def get_car_options_from_html(car_seq: str, s: requests.Session) -> List[Dict[str, Any]]:
     """차량 옵션 코드만 추출"""
@@ -867,6 +910,55 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
             if vehicle_data['vehicle_no']:
                 existing_vehiclenos.add(vehicle_data['vehicle_no'])
         
+        # 7. 보험이력 저장 (차량 정보 저장 후)
+        insurance_saved_count = 0
+        for record in batch_records:
+            insurance_data = record.get('insurance_data')
+            if insurance_data:
+                car_seq = record.get('car_seq')
+                vehicle_id = vehicle_id_map.get(int(car_seq))
+                
+                if vehicle_id:
+                    # vehicle_id를 보험이력 데이터에 추가
+                    insurance_data['vehicle_id'] = vehicle_id
+                    
+                    # 중복 체크
+                    existing_insurance = session.query(InsuranceHistory).filter(
+                        InsuranceHistory.vehicle_id == vehicle_id,
+                        InsuranceHistory.platform == insurance_data['platform']
+                    ).first()
+                    
+                    if not existing_insurance:
+                        # 보험이력 저장
+                        insurance_history = InsuranceHistory(
+                            vehicle_id=vehicle_id,
+                            platform=insurance_data['platform'],
+                            my_accident_cnt=insurance_data.get('my_accident_cnt', 0),
+                            other_accident_cnt=insurance_data.get('other_accident_cnt', 0),
+                            my_accident_cost=insurance_data.get('my_accident_cost', 0),
+                            other_accident_cost=insurance_data.get('other_accident_cost', 0),
+                            total_accident_cnt=insurance_data.get('total_accident_cnt', 0),
+                            total_loss_cnt=insurance_data.get('total_loss_cnt', 0),
+                            total_loss_date=insurance_data.get('total_loss_date'),
+                            robber_cnt=insurance_data.get('robber_cnt', 0),
+                            robber_date=insurance_data.get('robber_date'),
+                            flood_total_loss_cnt=insurance_data.get('flood_total_loss_cnt', 0),
+                            flood_part_loss_cnt=insurance_data.get('flood_part_loss_cnt', 0),
+                            flood_date=insurance_data.get('flood_date'),
+                            owner_change_cnt=insurance_data.get('owner_change_cnt', 0),
+                            car_no_change_cnt=insurance_data.get('car_no_change_cnt', 0),
+                            government=insurance_data.get('government', 0),
+                            business=insurance_data.get('business', 0),
+                            rental=insurance_data.get('rental', 0),
+                            loan=insurance_data.get('loan', 0),
+                            not_join_periods=insurance_data.get('not_join_periods')
+                        )
+                        session.add(insurance_history)
+                        insurance_saved_count += 1
+        
+        if insurance_saved_count > 0:
+            print(f"[보험이력 저장] {insurance_saved_count}건 저장 완료")
+        
         return len(vehicle_bulk_data), skipped_count, options_saved_count
 
 # =============================================================================
@@ -898,7 +990,12 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
         print(f"\n[{i}/{len(car_seqs)}] carSeq: {seq} 처리 중...")
 
         # 1. HTML 파싱 (carHistorySeq 포함)
-        html_data, s = get_car_detail_from_html(str(seq), session=s)
+        html_data, s, cookie_refreshed = get_car_detail_from_html(str(seq), session=s)
+        
+        # 쿠키가 갱신되었으면 보험이력 로그인 무효화
+        if cookie_refreshed:
+            print(f"   [보험이력] 쿠키 갱신됨 - 로그인 상태 무효화")
+            insurance_session_valid = False
         
         # 2. 옵션 크롤링
         options = get_car_options_from_html(str(seq), s)
@@ -906,6 +1003,7 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
         # 3. 차량 레코드 생성
         record = create_vehicle_record(api_data, html_data, maker_info)
         record['options'] = options
+        record['insurance_data'] = None  # 보험이력 데이터 저장용
         complete_records.append(record)
 
         print(
@@ -927,20 +1025,31 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
                     try:
                         driver = login_with_naver_via_insurance(str(seq))
                         if driver:
-                            cookies = extract_cookies_from_driver(driver)
-                            apply_cookies_to_session(s, cookies)
+                            # 쿠키 및 UA 추출
+                            cookies, user_agent = extract_cookies_and_ua_from_driver(driver)
                             driver.quit()
-                            insurance_session_valid = True
-                            print(f"   [보험이력] 로그인 성공 ✓")
+                            
+                            # 새 세션 생성 (기존 세션과 쿠키 충돌 방지)
+                            print(f"   [보험이력] 새 세션 생성 중...")
+                            s = build_session()
+                            
+                            # 쿠키 및 UA 적용
+                            apply_cookies_to_session(s, cookies, user_agent)
+                            
+                            # 워밍업 시퀀스 실행
+                            if warmup_insurance_session(str(seq), s):
+                                insurance_session_valid = True
+                                print(f"   [보험이력] 로그인 + 워밍업 성공 ✓")
+                            else:
+                                print(f"   [보험이력] 워밍업 실패, 보험이력 크롤링 스킵")
                         else:
                             print(f"   [보험이력] 로그인 실패, 보험이력 크롤링 스킵")
                     except Exception as e:
                         print(f"   [보험이력 로그인 오류] {e}")
                 
-                # 보험이력 크롤링 시도
+                # 보험이력 크롤링 (수집만, 저장은 나중에)
                 if insurance_session_valid:
                     try:
-                        # get_insurance_history_with_session_direct 사용 (carHistorySeq 직접 전달)
                         insurance_data = get_insurance_history_with_car_history_seq(
                             car_seq=str(seq),
                             car_history_seq=car_history_seq,
@@ -948,12 +1057,9 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
                         )
                         
                         if insurance_data:
-                            # DB에 저장
-                            saved = save_insurance_history_to_db([insurance_data])
-                            if saved > 0:
-                                print(f"   [보험이력] 저장 완료: 사고 {insurance_data['total_accident_cnt']}건")
-                            else:
-                                print(f"   [보험이력] 이미 존재하거나 저장 실패")
+                            # 레코드에 보험이력 데이터 저장 (DB 저장은 나중에)
+                            record['insurance_data'] = insurance_data
+                            print(f"   [보험이력] 수집 완료: 사고 {insurance_data['total_accident_cnt']}건")
                         else:
                             # 세션 만료 가능성
                             print(f"   [보험이력] 데이터 없음 (세션 만료 가능성)")
@@ -1416,21 +1522,79 @@ def save_inspection_to_db(inspection_records: List[Dict]):
 # 8. 네이버 SNS 로그인
 # =============================================================================
 
-def extract_cookies_from_driver(driver: webdriver.Chrome) -> List[Dict[str, Any]]:
-    """Selenium 드라이버에서 쿠키 추출"""
+def extract_cookies_and_ua_from_driver(driver: webdriver.Chrome) -> tuple[List[Dict[str, Any]], str]:
+    """Selenium 드라이버에서 쿠키 및 User-Agent 추출"""
     cookies = driver.get_cookies()
+    user_agent = driver.execute_script("return navigator.userAgent")
     print(f"[쿠키 추출] {len(cookies)}개 쿠키 추출 완료")
-    return cookies
+    print(f"[UA 추출] {user_agent}")
+    return cookies, user_agent
 
-def apply_cookies_to_session(session: requests.Session, cookies: List[Dict[str, Any]]) -> None:
-    """Requests 세션에 쿠키 적용"""
+def apply_cookies_to_session(session: requests.Session, cookies: List[Dict[str, Any]], user_agent: str = None) -> None:
+    """Requests 세션에 쿠키 및 UA 적용 (도메인/경로 정확히 보존)"""
+    important_cookies = []
     for cookie in cookies:
+        # Selenium 쿠키의 domain/path를 그대로 사용
         session.cookies.set(
-            cookie['name'], 
-            cookie['value'], 
-            domain=cookie.get('domain', '.kbchachacha.com')
+            name=cookie['name'],
+            value=cookie['value'],
+            domain=cookie.get('domain'),  # 그대로 사용
+            path=cookie.get('path', '/'),
+            secure=cookie.get('secure', False),
+            expires=cookie.get('expiry')
         )
-    print(f"[쿠키 적용] {len(cookies)}개 쿠키를 requests 세션에 적용")
+        # 중요한 쿠키 확인
+        if cookie['name'] in ['JSESSIONID', 'NA_SA', 'NA_SAS', 'NA_CO']:
+            important_cookies.append(cookie['name'])
+    
+    # User-Agent 복제
+    if user_agent:
+        session.headers.update({"User-Agent": user_agent})
+        print(f"[UA 적용] Selenium UA 복제 완료")
+    
+    print(f"[쿠키 적용] {len(cookies)}개 쿠키 적용 (중요: {', '.join(important_cookies) if important_cookies else '없음'})")
+
+def warmup_insurance_session(car_seq: str, session: requests.Session) -> bool:
+    """보험이력 세션 워밍업 (서버 세션 컨텍스트 설정)"""
+    try:
+        print(f"[워밍업] 보험이력 세션 초기화 중...")
+        
+        # 1. 메인 페이지 방문
+        session.get(f"{KB_HOST}/public/search/main.kbc", timeout=10)
+        time.sleep(0.5)
+        
+        # 2. 차량 상세 페이지 방문 (보험이력 컨텍스트)
+        session.get(f"{DETAIL_URL}?carSeq={car_seq}&f=carhistory", timeout=10)
+        time.sleep(0.5)
+        
+        # 3. 보험이력 체크 API 호출 (멤버십/세션 검증)
+        check_response = session.post(
+            INSURANCE_HISTORY_CHECK_URL,
+            data={"carSeq": car_seq},
+            headers={
+                "Accept": "*/*",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": f"{DETAIL_URL}?carSeq={car_seq}&f=carhistory"
+            },
+            timeout=10
+        )
+        
+        if check_response.status_code == 200:
+            data = check_response.json()
+            if data.get("errCode") == "0":
+                print(f"[워밍업] 완료 - 로그인 상태 확인됨 ✓")
+                return True
+            else:
+                print(f"[워밍업] 실패 - errCode: {data.get('errCode')}, errMsg: {data.get('errMsg')}")
+                return False
+        else:
+            print(f"[워밍업] 실패 - HTTP {check_response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"[워밍업 오류] {e}")
+        return False
 
 # =============================================================================
 # 9. 보험이력 데이터 추출
@@ -1745,13 +1909,19 @@ def crawl_insurance_history_batch(car_seqs: List[str] = None, limit: int = None)
         return []
     
     try:
-        # 쿠키 추출
-        cookies = extract_cookies_from_driver(driver)
+        # 쿠키 및 UA 추출
+        cookies, user_agent = extract_cookies_and_ua_from_driver(driver)
+        driver.quit()
         
-        # 2. Requests 세션 생성 및 쿠키 적용
-        print(f"\n[2단계] Requests 세션에 쿠키 적용...")
+        # 2. 새 Requests 세션 생성 및 쿠키 적용
+        print(f"\n[2단계] 새 세션 생성 및 쿠키 적용...")
         session = build_session()
-        apply_cookies_to_session(session, cookies)
+        apply_cookies_to_session(session, cookies, user_agent)
+        
+        # 워밍업 시퀀스
+        if not warmup_insurance_session(car_seqs[0], session):
+            print("[보험이력 크롤링] 워밍업 실패")
+            return []
         
         # 3. 보험이력 크롤링
         print(f"\n[3단계] 보험이력 데이터 크롤링...")
@@ -1802,8 +1972,7 @@ def crawl_insurance_history_batch(car_seqs: List[str] = None, limit: int = None)
         return results
         
     finally:
-        driver.quit()
-        print("[보험이력 크롤링] Selenium 브라우저 종료")
+        print("[보험이력 크롤링] 완료")
 
 # =============================================================================
 # 11. 보험이력 DB 저장
