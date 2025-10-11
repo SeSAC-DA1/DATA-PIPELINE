@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # 환경변수 로드
 load_dotenv()
@@ -698,63 +700,60 @@ def create_vehicle_record(api_data: Dict[str, Any], html_data: Dict[str, Any], m
     }
     return record
 
-def save_vehicle_options_batch(vehicles_options: List[Dict], platform: str = 'kb_chachacha') -> int:
-    """차량 옵션들을 배치로 처리하여 DB에 저장 (최적화된 벌크 인서트)"""
+def save_vehicle_options_batch(session, vehicles_options: List[Dict], platform: str = 'kb_chachacha') -> int:
+    """차량 옵션들을 배치로 처리하여 DB에 저장
+    
+    Note: 새 차량만 저장하므로 중복 체크 불필요
+    """
     if not vehicles_options:
         return 0
     
-    with session_scope() as session:
-        try:
-            # 1. 모든 옵션 마스터를 한 번에 조회 (N+1 쿼리 문제 해결)
-            option_masters = {opt.option_code: opt.option_master_id for opt in session.query(OptionMaster).all()}
+    try:
+        # 1. 옵션 마스터 조회
+        option_masters = {opt.option_code: opt.option_master_id 
+                         for opt in session.query(OptionMaster).all()}
+        
+        # 2. 벌크 인서트 데이터 준비
+        bulk_data = []
+        for vehicle_data in vehicles_options:
+            vehicle_id = vehicle_data['vehicle_id']
+            options = vehicle_data['options']
             
-            # 2. 기존 VehicleOption들을 한 번에 조회
-            existing_pairs = set()
-            for vo in session.query(VehicleOption.vehicle_id, VehicleOption.option_master_id).all():
-                existing_pairs.add((vo.vehicle_id, vo.option_master_id))
+            if not options:
+                continue
             
-            # 3. 벌크 인서트용 데이터 준비
-            bulk_data = []
+            # 플랫폼별 옵션 코드 추출 및 공통 옵션 코드로 변환
+            platform_codes = [option['code'] for option in options]
+            global_codes = convert_platform_options_to_global(platform_codes, platform)
             
-            for vehicle_data in vehicles_options:
-                vehicle_id = vehicle_data['vehicle_id']
-                options = vehicle_data['options']
-                
-                if not options:
-                    continue
-                
-                # 플랫폼별 옵션 코드 추출 및 공통 옵션 코드로 변환
-                platform_codes = [option['code'] for option in options]
-                global_codes = convert_platform_options_to_global(platform_codes, platform)
-                
-                # 중복 제거된 옵션만 추가
-                for option_code in global_codes:
-                    option_master_id = option_masters.get(option_code)
-                    if option_master_id and (vehicle_id, option_master_id) not in existing_pairs:
-                        bulk_data.append({
-                            'vehicle_id': vehicle_id,
-                            'option_master_id': option_master_id
-                        })
-                        existing_pairs.add((vehicle_id, option_master_id))  # 중복 방지
-            
-            # 4. 벌크 인서트 실행
-            if bulk_data:
-                session.bulk_insert_mappings(VehicleOption, bulk_data)
-                return len(bulk_data)
-            
-            return 0
-            
-        except Exception as e:
-            print(f"[배치 옵션 저장 오류]: {e}")
-            import traceback
-            print(f"[DEBUG] 상세 오류: {traceback.format_exc()}")
-            return 0
+            for option_code in global_codes:
+                option_master_id = option_masters.get(option_code)
+                if option_master_id:
+                    bulk_data.append({
+                        'vehicle_id': vehicle_id,
+                        'option_master_id': option_master_id
+                    })
+        
+        # 3. 벌크 인서트 실행
+        if bulk_data:
+            session.bulk_insert_mappings(VehicleOption, bulk_data)
+            return len(bulk_data)
+        
+        return 0
+        
+    except Exception as e:
+        print(f"[옵션 저장 오류]: {e}")
+        return 0
 
-def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
-    """차량 정보와 공통 옵션 정보를 100대씩 배치로 DB에 저장합니다."""
+def save_car_info_to_db(records: List[Dict[str, Any]]) -> tuple[int, int, int]:
+    """차량 정보와 공통 옵션 정보를 100대씩 배치로 DB에 저장합니다.
+    
+    Returns:
+        (저장된 차량 수, 건너뛴 차량 수, 저장된 옵션 수)
+    """
     if not records:
-        print("저장할 레코드가 없습니다.")
-        return
+        print("[경고] 저장할 레코드가 없습니다.")
+        return 0, 0, 0
 
     BATCH_SIZE = 100
     total_records = len(records)
@@ -763,11 +762,7 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
     total_options_saved = 0
     
     print(f"[배치 저장 시작] 총 {total_records}건을 {BATCH_SIZE}개씩 배치로 저장")
-    
-    # 기존 차량번호를 한 번에 조회 (최적화)
-    with session_scope() as session:
-        existing_vehiclenos = {row[0] for row in session.query(Vehicle.vehicle_no).all() if row[0]}
-        print(f"[기존 DB] 저장된 차량번호: {len(existing_vehiclenos)}개")
+    print("[참고] vehicle_no 중복 체크는 이미 crawl_complete_car_info에서 완료")
     
     # 배치별로 처리
     for i in range(0, total_records, BATCH_SIZE):
@@ -778,7 +773,7 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
         print(f"[배치 {batch_num}/{total_batches}] {len(batch_records)}건 처리 중...")
         
         try:
-            saved, skipped, options_saved = save_car_info_batch(batch_records, existing_vehiclenos)
+            saved, skipped, options_saved = save_car_info_batch(batch_records)
             total_saved += saved
             total_skipped += skipped
             total_options_saved += options_saved
@@ -790,7 +785,7 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
             # 개별 저장으로 fallback
             for record in batch_records:
                 try:
-                    saved, skipped, options_saved = save_car_info_batch([record], existing_vehiclenos)
+                    saved, skipped, options_saved = save_car_info_batch([record])
                     total_saved += saved
                     total_skipped += skipped
                     total_options_saved += options_saved
@@ -799,21 +794,27 @@ def save_car_info_to_db(records: List[Dict[str, Any]]) -> None:
                     total_skipped += 1
     
     print(f"[전체 저장 완료] 차량: {total_saved}건 저장, {total_skipped}건 건너뜀, 공통 옵션: {total_options_saved}개 저장")
+    
+    return total_saved, total_skipped, total_options_saved
 
-def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos: set) -> tuple[int, int, int]:
-    """차량 정보 배치를 DB에 저장합니다."""
+def save_car_info_batch(batch_records: List[Dict[str, Any]]) -> tuple[int, int, int]:
+    """차량 정보 배치를 DB에 저장합니다.
+    
+    Note: vehicle_no 중복 체크는 이미 crawl_complete_car_info에서 완료
+    """
     if not batch_records:
         return 0, 0, 0
     
     with session_scope() as session:
-        # 1. 중복 제거 및 데이터 준비
+        # 1. 차량 데이터 준비
         vehicle_bulk_data = []
-        vehicles_options = []
-        skipped_count = 0
+        options_by_car_seq = {}  # {car_seq: [option_codes]}
         
         for record in batch_records:
+            car_seq = int(record.get('car_seq', 0))
+            
             vehicle_data = {
-                'car_seq': int(record.get('car_seq', 0)),
+                'car_seq': car_seq,
                 'vehicle_no': record.get('vehicle_no'),
                 'platform': record.get('platform'),
                 'origin': record.get('origin'),
@@ -836,130 +837,91 @@ def save_car_info_batch(batch_records: List[Dict[str, Any]], existing_vehiclenos
                 'location': record.get('location'),
                 'detail_url': record.get('detail_url'),
                 'photo': record.get('photo'),
-                'has_options': None  
+                'has_options': bool(record.get('options'))  # 옵션 유무 플래그
             }
-            
-            # 중복 체크
-            if vehicle_data['vehicle_no'] and vehicle_data['vehicle_no'] in existing_vehiclenos:
-                skipped_count += 1
-                continue
-            
             vehicle_bulk_data.append(vehicle_data)
             
-            # 옵션 정보 수집
+            # 옵션 정보 저장
             options = record.get('options', [])
             if options:
-                vehicles_options.append({
-                    'car_seq': vehicle_data['car_seq'],
-                    'options': options
-                })
+                options_by_car_seq[car_seq] = options
         
-        if not vehicle_bulk_data:
-            return 0, skipped_count, 0
-        
-        # 2. 차량 정보 일괄 저장 (ORM 객체로 변경)
+        # 2. 차량 정보 일괄 저장
         vehicle_objects = [Vehicle(**v) for v in vehicle_bulk_data]
         session.bulk_save_objects(vehicle_objects, return_defaults=True)
         session.flush()
         
-        # 3. 저장된 차량들의 ID 매핑 (ORM 객체에서 직접 가져오기)
+        # 3. vehicle_id 매핑 생성
         vehicle_id_map = {v.car_seq: v.vehicle_id for v in vehicle_objects}
         
-        # 4. has_options 플래그 업데이트
-        vehicles_with_options = []
-        vehicles_without_options = []
-        
-        for vehicle_data in vehicle_bulk_data:
-            car_seq = vehicle_data['car_seq']
-            vehicle_id = vehicle_id_map.get(car_seq)
-            
-            if vehicle_id:
-                # 옵션 유무 확인
-                has_options = any(vo['car_seq'] == car_seq for vo in vehicles_options)
-                if has_options:
-                    vehicles_with_options.append(vehicle_id)
-                else:
-                    vehicles_without_options.append(vehicle_id)
-        
-        # has_options 플래그 일괄 업데이트
-        if vehicles_with_options:
-            session.query(Vehicle).filter(
-                Vehicle.vehicle_id.in_(vehicles_with_options)
-            ).update({Vehicle.has_options: True}, synchronize_session=False)
-        
-        if vehicles_without_options:
-            session.query(Vehicle).filter(
-                Vehicle.vehicle_id.in_(vehicles_without_options)
-            ).update({Vehicle.has_options: False}, synchronize_session=False)
-        
-        # 5. 옵션 정보 일괄 저장
+        # 4. 옵션 저장
         options_saved_count = 0
-        if vehicles_options:
-            # vehicle_id 매핑 추가
-            for vo in vehicles_options:
-                car_seq = vo['car_seq']
+        if options_by_car_seq:
+            vehicles_options = []
+            for car_seq, options in options_by_car_seq.items():
                 vehicle_id = vehicle_id_map.get(car_seq)
                 if vehicle_id:
-                    vo['vehicle_id'] = vehicle_id
+                    vehicles_options.append({
+                        'vehicle_id': vehicle_id,
+                        'options': options
+                    })
             
-            # 옵션 저장
-            options_saved_count = save_vehicle_options_batch(vehicles_options)
+            if vehicles_options:
+                options_saved_count = save_vehicle_options_batch(session, vehicles_options)
         
-        # 6. 기존 차량번호 목록 업데이트
-        for vehicle_data in vehicle_bulk_data:
-            if vehicle_data['vehicle_no']:
-                existing_vehiclenos.add(vehicle_data['vehicle_no'])
-        
-        # 7. 보험이력 저장 (차량 정보 저장 후)
+        # 5. 보험이력 저장
         insurance_saved_count = 0
         for record in batch_records:
             insurance_data = record.get('insurance_data')
-            if insurance_data:
-                car_seq = record.get('car_seq')
-                vehicle_id = vehicle_id_map.get(int(car_seq))
+            if not insurance_data:
+                continue
                 
-                if vehicle_id:
-                    # vehicle_id를 보험이력 데이터에 추가
-                    insurance_data['vehicle_id'] = vehicle_id
-                    
-                    # 중복 체크
-                    existing_insurance = session.query(InsuranceHistory).filter(
-                        InsuranceHistory.vehicle_id == vehicle_id,
-                        InsuranceHistory.platform == insurance_data['platform']
-                    ).first()
-                    
-                    if not existing_insurance:
-                        # 보험이력 저장
-                        insurance_history = InsuranceHistory(
-                            vehicle_id=vehicle_id,
-                            platform=insurance_data['platform'],
-                            my_accident_cnt=insurance_data.get('my_accident_cnt', 0),
-                            other_accident_cnt=insurance_data.get('other_accident_cnt', 0),
-                            my_accident_cost=insurance_data.get('my_accident_cost', 0),
-                            other_accident_cost=insurance_data.get('other_accident_cost', 0),
-                            total_accident_cnt=insurance_data.get('total_accident_cnt', 0),
-                            total_loss_cnt=insurance_data.get('total_loss_cnt', 0),
-                            total_loss_date=insurance_data.get('total_loss_date'),
-                            robber_cnt=insurance_data.get('robber_cnt', 0),
-                            robber_date=insurance_data.get('robber_date'),
-                            flood_total_loss_cnt=insurance_data.get('flood_total_loss_cnt', 0),
-                            flood_part_loss_cnt=insurance_data.get('flood_part_loss_cnt', 0),
-                            flood_date=insurance_data.get('flood_date'),
-                            owner_change_cnt=insurance_data.get('owner_change_cnt', 0),
-                            car_no_change_cnt=insurance_data.get('car_no_change_cnt', 0),
-                            government=insurance_data.get('government', 0),
-                            business=insurance_data.get('business', 0),
-                            rental=insurance_data.get('rental', 0),
-                            loan=insurance_data.get('loan', 0),
-                            not_join_periods=insurance_data.get('not_join_periods')
-                        )
-                        session.add(insurance_history)
-                        insurance_saved_count += 1
+            car_seq = int(record.get('car_seq'))
+            vehicle_id = vehicle_id_map.get(car_seq)
+            
+            if not vehicle_id:
+                continue
+            
+            # 중복 체크
+            existing = session.query(InsuranceHistory).filter(
+                InsuranceHistory.vehicle_id == vehicle_id,
+                InsuranceHistory.platform == insurance_data['platform']
+            ).first()
+            
+            if existing:
+                continue
+            
+            # 보험이력 저장
+            insurance_history = InsuranceHistory(
+                vehicle_id=vehicle_id,
+                platform=insurance_data['platform'],
+                my_accident_cnt=insurance_data.get('my_accident_cnt', 0),
+                other_accident_cnt=insurance_data.get('other_accident_cnt', 0),
+                my_accident_cost=insurance_data.get('my_accident_cost', 0),
+                other_accident_cost=insurance_data.get('other_accident_cost', 0),
+                total_accident_cnt=insurance_data.get('total_accident_cnt', 0),
+                total_loss_cnt=insurance_data.get('total_loss_cnt', 0),
+                total_loss_date=insurance_data.get('total_loss_date'),
+                robber_cnt=insurance_data.get('robber_cnt', 0),
+                robber_date=insurance_data.get('robber_date'),
+                flood_total_loss_cnt=insurance_data.get('flood_total_loss_cnt', 0),
+                flood_part_loss_cnt=insurance_data.get('flood_part_loss_cnt', 0),
+                flood_date=insurance_data.get('flood_date'),
+                owner_change_cnt=insurance_data.get('owner_change_cnt', 0),
+                car_no_change_cnt=insurance_data.get('car_no_change_cnt', 0),
+                government=insurance_data.get('government', 0),
+                business=insurance_data.get('business', 0),
+                rental=insurance_data.get('rental', 0),
+                loan=insurance_data.get('loan', 0),
+                not_join_periods=insurance_data.get('not_join_periods')
+            )
+            session.add(insurance_history)
+            insurance_saved_count += 1
         
         if insurance_saved_count > 0:
-            print(f"[보험이력 저장] {insurance_saved_count}건 저장 완료")
+            print(f"[보험이력] {insurance_saved_count}건 저장")
         
-        return len(vehicle_bulk_data), skipped_count, options_saved_count
+        return len(vehicle_bulk_data), 0, options_saved_count
 
 # =============================================================================
 # 6. 통합 크롤링 (차량 정보 + 옵션 + 보험이력)
@@ -982,12 +944,36 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
         return []
     print(f"[API 데이터 수집 완료] {len(api_data_list)}대")
 
-    by_seq = {str(item.get("carSeq", "")): item for item in api_data_list}
+    # vehicle_no 중복 체크 및 필터링
+    print("[중복 차량번호 체크 중...]")
+    with session_scope() as db_session:
+        existing_vehiclenos = {row[0] for row in db_session.query(Vehicle.vehicle_no).all() if row[0]}
+    
+    filtered_api_data = []
+    skipped_by_vehicleno = 0
+    
+    for item in api_data_list:
+        car_no = item.get("carNo", "")
+        if car_no and car_no in existing_vehiclenos:
+            skipped_by_vehicleno += 1
+        else:
+            filtered_api_data.append(item)
+    
+    if skipped_by_vehicleno > 0:
+        print(f"[중복 스킵] 차량번호 중복: {skipped_by_vehicleno}대")
+    print(f"[크롤링 대상] {len(filtered_api_data)}대")
+    
+    if not filtered_api_data:
+        print("[모든 차량이 중복] 크롤링할 차량이 없습니다.")
+        return []
+
+    by_seq = {str(item.get("carSeq", "")): item for item in filtered_api_data}
     complete_records: List[Dict[str, Any]] = []
 
-    for i, seq in enumerate(car_seqs, 1):
-        api_data = by_seq.get(str(seq), {})
-        print(f"\n[{i}/{len(car_seqs)}] carSeq: {seq} 처리 중...")
+    for i, item in enumerate(filtered_api_data, 1):
+        seq = str(item.get("carSeq", ""))
+        api_data = item
+        print(f"\n[{i}/{len(filtered_api_data)}] carSeq: {seq} 처리 중...")
 
         # 1. HTML 파싱 (carHistorySeq 포함)
         html_data, s, cookie_refreshed = get_car_detail_from_html(str(seq), session=s)
@@ -1069,7 +1055,7 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
                         print(f"   [보험이력 오류] {e}")
                         insurance_session_valid = False
 
-        if i < len(car_seqs):
+        if i < len(filtered_api_data):
             time.sleep(delay)
 
     print(f"\n[크롤링 완료] 총 {len(complete_records)}대의 완전한 정보 수집")
