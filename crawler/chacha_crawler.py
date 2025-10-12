@@ -1062,10 +1062,95 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
     return complete_records
 
 # =============================================================================
-# 7. 메인 크롤링 전략 (제조사별, 클래스별)
+# 7. 판매완료 차량 정리
 # =============================================================================
 
-def crawl_kb_chachacha():
+def _delete_vehicle_cascade(session, vehicle_id: int) -> bool:
+    """차량 및 관련 데이터 cascade 삭제"""
+    try:
+        # 차량 삭제 (cascade로 옵션, 보험이력도 자동 삭제)
+        vehicle = session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle_id).first()
+        if vehicle:
+            session.delete(vehicle)
+            session.commit()
+            return True
+        return False
+    except Exception as e:
+        print(f"[삭제 오류] {e}")
+        session.rollback()
+        return False
+
+def cleanup_sold_vehicles(batch_size: int = 50):
+    """판매된 차량 정리 (페이지 접근 시 404 또는 오류 반환 시 DB에서 제거)"""
+    print("[판매완료 차량 정리 시작]")
+    
+    total_deleted = 0
+    
+    with session_scope() as session:
+        total_vehicles = session.query(Vehicle).filter(Vehicle.platform == 'kb_chachacha').count()
+        print(f"[대상] DB 차차차 차량 {total_vehicles:,}대")
+        
+        offset = 0
+        s = build_session()
+        
+        while True:
+            vehicles_to_check = session.query(Vehicle).filter(
+                Vehicle.platform == 'kb_chachacha'
+            ).offset(offset).limit(batch_size).all()
+            
+            if not vehicles_to_check:
+                break
+            
+            print(f"[확인 중] {offset}~{offset+len(vehicles_to_check)} / {total_vehicles}", end='', flush=True)
+            
+            deleted_count = 0
+            for vehicle in vehicles_to_check:
+                try:
+                    # 차량 상세 페이지 접근 시도
+                    url = f"{DETAIL_URL}?carSeq={vehicle.car_seq}"
+                    response = s.get(url, timeout=5)
+                    
+                    # 404 또는 오류 페이지 확인
+                    if response.status_code == 404:
+                        is_sold = True
+                    else:
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        # 판매완료 또는 오류 메시지 확인
+                        error_texts = ['판매완료', '존재하지 않는', '삭제된', '찾을 수 없습니다']
+                        page_text = soup.get_text()
+                        is_sold = any(error_text in page_text for error_text in error_texts)
+                    
+                    if is_sold:
+                        # 판매된 차량 발견
+                        print(f"\n  [판매완료] CarSeq: {vehicle.car_seq} - 삭제 중...", end='', flush=True)
+                        if _delete_vehicle_cascade(session, vehicle.vehicle_id):
+                            deleted_count += 1
+                            print(" ✓")
+                        else:
+                            print(" ✗")
+                    
+                    time.sleep(0.1)  # 서버 부하 방지
+                    
+                except Exception as e:
+                    print(f"\n  [오류] CarSeq: {vehicle.car_seq} - {e}")
+                    continue
+            
+            if deleted_count > 0:
+                print(f" → {deleted_count}대 삭제")
+            else:
+                print(f" → 삭제 없음")
+            
+            total_deleted += deleted_count
+            offset += batch_size
+    
+    print(f"[정리 완료] 총 {total_deleted}대 삭제")
+    return total_deleted
+
+# =============================================================================
+# 8. 메인 크롤링 전략 (제조사별, 클래스별)
+# =============================================================================
+
+def crawl_kb_chachacha(cleanup_first: bool = True):
     """KB 차차차 통합 크롤러 (차량 정보 + 옵션 + 보험이력)"""
     
     # 1. DB 초기화
@@ -1077,7 +1162,13 @@ def crawl_kb_chachacha():
         print("[DB 연결 실패] 데이터베이스 연결을 확인해주세요.")
         return 0
     
-    # 2. 크롤링 시작
+    # 2. 판매완료 차량 정리 (선택적)
+    if cleanup_first:
+        print("\n[판매완료 차량 정리]")
+        cleanup_sold_vehicles()
+        print()
+    
+    # 3. 크롤링 시작
     total_processed = 0
     session = build_session()
     
@@ -2041,11 +2132,17 @@ def save_insurance_history_to_db(insurance_data_list: List[Dict[str, Any]]) -> i
 # =============================================================================
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='KB 차차차 크롤러')
+    parser.add_argument('--no-cleanup', action='store_true', help='판매완료 차량 정리 건너뛰기')
+    args = parser.parse_args()
+    
     print("="*80)
     print("KB 차차차 통합 크롤러 (차량 정보 + 옵션 + 보험이력)")
     print("="*80)
     try:
-        total = crawl_kb_chachacha()
+        total = crawl_kb_chachacha(cleanup_first=not args.no_cleanup)
         print(f"\n{'='*80}")
         print(f"✅ 크롤링 완료: 총 {total:,}건 처리")
         print(f"{'='*80}")
