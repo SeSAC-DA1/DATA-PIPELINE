@@ -56,7 +56,7 @@ class VehicleOption(Base):
     __tablename__ = 'vehicle_options'
     
     vehicle_option_id = Column(Integer, primary_key=True, autoincrement=True)
-    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id'), nullable=False)
+    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id'), nullable=False)  # CASCADE 없음 (실제 DB와 동일)
     option_master_id = Column(Integer, ForeignKey('option_masters.option_master_id'), nullable=False)
     
     # 인덱스
@@ -70,7 +70,7 @@ class InsuranceHistory(Base):
     __tablename__ = 'insurance_history'
     
     insurance_id = Column(Integer, primary_key=True, autoincrement=True)
-    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id'), nullable=False)
+    vehicle_id = Column(Integer, ForeignKey('vehicles.vehicle_id'), nullable=False)  # CASCADE 없음 (실제 DB와 동일)
     platform = Column(String, nullable=False)  # 'encar' 또는 'chacha'
     
     

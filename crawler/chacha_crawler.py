@@ -1068,13 +1068,17 @@ def crawl_complete_car_info(car_seqs: List[str], delay: float = 1.0, session: Op
 def _delete_vehicle_cascade(session, vehicle_id: int) -> bool:
     """차량 및 관련 데이터 cascade 삭제"""
     try:
-        # 차량 삭제 (cascade로 옵션, 보험이력도 자동 삭제)
-        vehicle = session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle_id).first()
-        if vehicle:
-            session.delete(vehicle)
-            session.commit()
-            return True
-        return False
+        # 1. VehicleOption 테이블에서 먼저 삭제 (외래키 제약조건)
+        session.query(VehicleOption).filter(VehicleOption.vehicle_id == vehicle_id).delete()
+        
+        # 2. InsuranceHistory 테이블에서 삭제 (외래키 제약조건)
+        session.query(InsuranceHistory).filter(InsuranceHistory.vehicle_id == vehicle_id).delete()
+        
+        # 3. Vehicle 테이블에서 삭제 (Inspection은 CASCADE로 자동 삭제됨)
+        session.query(Vehicle).filter(Vehicle.vehicle_id == vehicle_id).delete()
+        
+        session.commit()
+        return True
     except Exception as e:
         print(f"[삭제 오류] {e}")
         session.rollback()
