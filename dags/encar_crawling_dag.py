@@ -30,17 +30,22 @@ with DAG(
         print(f"[Airflow] 엔카 크롤링 시작: {datetime.now()}")
         return "started"
 
-    def crawl_encar_task():
+    def crawl_encar_task(**context):
         import sys
-        import os
         sys.path.append('/opt/airflow')
+        
+        # DAG 실행 시 전달된 파라미터 확인
+        dag_run = context.get('dag_run')
+        conf = dag_run.conf if dag_run else {}
+        skip_cleanup = conf.get('skip_cleanup', False)  # 기본값은 False
+        
         from crawler.encar_crawler import crawl_encar
         
         print('[Airflow] 엔카 크롤링 시작')
         total = crawl_encar(
             max_pages_per_modelgroup=1000,
             page_size=50,
-            cleanup_first=True  # 판매완료 차량 정리
+            cleanup_first=not skip_cleanup  # skip_cleanup이 True면 cleanup_first는 False
         )
         print(f'[Airflow] 엔카 크롤링 완료: {total}건')
         return total

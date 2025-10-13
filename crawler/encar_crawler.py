@@ -812,19 +812,14 @@ def cleanup_sold_vehicles(batch_size: int = 50):
                 
                 deleted_count = 0
                 for vehicle in vehicles_to_check:
-                    detail_info = get_encar_api_data(
-                        f"{DETAIL_API_URL}/{vehicle.car_seq}?include=OPTIONS", 
-                        http_session
-                    )
+                    # 보험이력 API로 판매 여부 확인
+                    record_api_url = f"{RECORD_API_URL}/{vehicle.car_seq}/open?vehicleNo={vehicle.vehicle_no}"
+                    record_info = get_encar_api_data(record_api_url, http_session)
                     
-                    if not detail_info:
-                        # 판매된 차량 발견
-                        print(f"\n  [판매됨] CarSeq: {vehicle.car_seq} - 삭제 중...", end='', flush=True)
+                    if not record_info:
+                        # 보험이력이 없으면 판매된 차량
                         if _delete_vehicle_cascade(session, vehicle.vehicle_id):
                             deleted_count += 1
-                            print(" ✓")
-                        else:
-                            print(" ✗")
                 
                 if deleted_count > 0:
                     print(f" → {deleted_count}대 삭제")
