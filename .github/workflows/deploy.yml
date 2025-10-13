@@ -2,7 +2,7 @@ name: Deploy to AWS
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -50,18 +50,22 @@ jobs:
           envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION
           script: |
             cd ~/CarFin
-            git pull
             
-            # ECR 로그인
+            # 1. 최신 코드 받기 (볼륨 마운트용)
+            git pull origin main
+            
+            # 2. ECR 로그인
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
             
-            # 최신 이미지 pull
+            # 3. 최신 이미지 pull
             docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
             
-            # 재시작
+            # 4. 기존 컨테이너 중지 및 삭제
             docker-compose down
+            
+            # 5. 새 컨테이너 시작
             docker-compose up -d
             
-            # 정리
+            # 6. 정리
             docker image prune -af
 
