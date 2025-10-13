@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta
 from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.python import PythonOperator
+import sys
+sys.path.append('/opt/airflow')
+from crawler.getcha_crawler import execute_full_crawling
 
 # 기본 설정
 default_args = {
@@ -19,8 +21,9 @@ with DAG(
     default_args=default_args,
     description='Getcha 차량 오너 리뷰 주간 크롤링',
     schedule='0 1 * * 0',  # 매주 일요일 새벽 1시
-    start_date=datetime(2024, 1, 1),
+    start_date=datetime(2025, 10, 14),  # 현재 날짜로 설정
     catchup=False,
+    max_active_runs=1,  # 동시 실행 최대 1개로 제한
     tags=['crawling', 'getcha', 'review', 'weekly'],
 ) as dag:
 
@@ -31,19 +34,19 @@ with DAG(
         return "started"
 
     def crawl_getcha_task():
-        """Getcha 리뷰 크롤링 태스크"""
-        import sys
-        sys.path.append('/opt/airflow')
-        from crawler.getcha_crawler import execute_full_crawling
-        
-        print("[Airflow] Getcha 리뷰 크롤링 시작")
-        reviews = execute_full_crawling(
-            start_page=1,
-            end_page=None,  # 전체 페이지
-            topic_id=11
-        )
-        print(f"[Airflow] Getcha 리뷰 크롤링 완료: {len(reviews)}건")
-        return len(reviews)
+        """Getcha 리뷰 크롤링 메인 태스크"""
+        try:
+            print("[Airflow] Getcha 리뷰 크롤링 시작")
+            reviews = execute_full_crawling(
+                start_page=1,
+                end_page=None,  # 전체 페이지
+                topic_id=11
+            )
+            print(f"[Airflow] Getcha 리뷰 크롤링 완료: {len(reviews)}건")
+            return len(reviews)
+        except Exception as e:
+            print(f'[Airflow] Getcha 리뷰 크롤링 실패: {str(e)}')
+            raise
 
     def end_task():
         """완료 로그 출력"""

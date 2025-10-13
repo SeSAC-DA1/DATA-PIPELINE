@@ -59,8 +59,8 @@ def build_session() -> requests.Session:
     s.mount("https://", adapter)
 
     s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "ko,ko-KR;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate, br, zstd",
         "Origin": "https://www.encar.com",
@@ -666,6 +666,13 @@ def crawl_encar_model(brand: str, model: str, session: requests.Session, existin
         if final_records:
             saved_count = save_data_to_db(final_records)
             total_processed += saved_count
+            
+            # 저장된 데이터를 existing_data에 실시간 추가
+            for record in final_records:
+                existing_data['car_seqs'].add(str(record['car_seq']))
+                if record['vehicle_no']:
+                    existing_data['vehicle_nos'].add(record['vehicle_no'])
+            
             print(f"    → 최종 {len(final_records)}건 신규 → {saved_count}건 저장")
             
             # 저장 성공한 경우에만 기존 데이터에 추가

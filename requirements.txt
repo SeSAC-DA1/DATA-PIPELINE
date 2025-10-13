@@ -1,0 +1,16 @@
+# FAB 프로바이더
+apache-airflow-providers-fab>=1.4.0
+
+# 크롤링 관련 패키지
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+selenium>=4.15.0
+lxml>=4.9.0
+webdriver-manager>=4.0.0
+
+# 데이터베이스
+psycopg2-binary>=2.9.9
+
+# 유틸리티
+python-dotenv>=1.0.0
+

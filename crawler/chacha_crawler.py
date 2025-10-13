@@ -1112,17 +1112,26 @@ def cleanup_sold_vehicles(batch_size: int = 50):
                 try:
                     # 차량 상세 페이지 접근 시도
                     url = f"{DETAIL_URL}?carSeq={vehicle.car_seq}"
-                    response = s.get(url, timeout=5)
+                    response = s.get(url, timeout=10)
                     
                     # 404 또는 오류 페이지 확인
                     if response.status_code == 404:
                         is_sold = True
                     else:
                         soup = BeautifulSoup(response.text, 'html.parser')
-                        # 판매완료 또는 오류 메시지 확인
-                        error_texts = ['판매완료', '존재하지 않는', '삭제된', '찾을 수 없습니다']
-                        page_text = soup.get_text()
-                        is_sold = any(error_text in page_text for error_text in error_texts)
+                        
+                        # 정상적인 차량 상세 페이지인지 확인
+                        has_detail_info = soup.select_one(".detail-info-table")
+                        has_price = soup.select_one(".price")
+                        
+                        # 상세 정보와 가격이 모두 없으면 판매완료로 간주
+                        if not has_detail_info and not has_price:
+                            # 추가 검증: 명확한 판매완료 메시지가 있는지 확인
+                            page_text = soup.get_text()
+                            sold_keywords = ['판매완료된 차량', '판매가 완료된', '이미 판매된']
+                            is_sold = any(keyword in page_text for keyword in sold_keywords)
+                        else:
+                            is_sold = False
                     
                     if is_sold:
                         # 판매된 차량 발견
@@ -1133,7 +1142,7 @@ def cleanup_sold_vehicles(batch_size: int = 50):
                         else:
                             print(" ✗")
                     
-                    time.sleep(0.1)  # 서버 부하 방지
+                    time.sleep(0.2)  # 서버 부하 방지 (딜레이 증가)
                     
                 except Exception as e:
                     print(f"\n  [오류] CarSeq: {vehicle.car_seq} - {e}")

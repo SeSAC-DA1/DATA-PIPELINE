@@ -625,48 +625,93 @@ def crawl_getcha_reviews():
 
 ### ---- Airflow ----
 
-#### 1️⃣ **FabAuthManager 의존성 충돌**
+#### 1️⃣ **FabAuthManager + Python 3.13 호환성 이슈**
 
 **문제 상황:**  
-- 초기에 SimpleAuth로 개발 → 배포용으로 부적합
+- 초기에 SimpleAuthManager로 개발 → 개발용으로만 간단하고 배포용으로는 권장되지 않음
 - FabAuthManager로 변경 시도
-- 커스텀 이미지 빌드 시 패키지 의존성 충돌 발생
+- **첫 번째 에러:** `ModuleNotFoundError: No module named 'airflow.providers.fab'`
+  - 공식 이미지에 FAB가 포함되어 있을 거라 생각했고 공식문서에 그렇게 되어 있다는 걸 찾음 하지만만...
+  - **Airflow 3.0부터 FAB Provider가 별도 패키지로 분리됨!**
+  - 결국 다른 공식문서에서 별로 분리되었다는 걸 확인함. 그래서 추가 설치했지만,
+
+- **두 번째 에러 (Python 3.13):** `ModuleNotFoundError: No module named 'connexion'`
+  - FAB Provider 설치했는데도 에러 발생
+  - `apache/airflow:3.1.0-python3.13` (최신) 사용 시
+
+**원인 분석:**
+```python
+# 1. Airflow 3.0+ 변경사항
+- SimpleAuthManager: 기본 포함 (단순한 인증만)
+- FabAuthManager: 별도 설치 필요 (RBAC, 사용자 관리)
+  → apache-airflow-providers-fab 패키지 설치 필수!
+
+# 2. Python 3.13 호환성 문제
+# apache-airflow-providers-fab 3.0.0 요구사항 (PyPI)
+connexion[flask]>=2.14.2,<3.0  # Python 3.13 미만만 지원
+flask>=2.2.1,<2.3              # Python 3.13 미만만 지원
+flask-appbuilder==4.6.3        # Python 3.13 미만만 지원
+```
+→ **FAB Provider가 Python 3.13을 아직 완전히 지원하지 않음**
 
 **시도한 방법:**
 ```
-1. Airflow 3.0.6 + 이미 만들어진 docker-compose 사용
+1. 공식 이미지만 사용 (FAB 자동 포함될 것으로 예상)
+   → ❌ ModuleNotFoundError: airflow.providers.fab
+   → 공식 문서 혼란: "기본 포함"이라 했지만 실제로는 별도 설치 필요
+
+2. Airflow 3.0.6 + 이미 만들어진 docker-compose 사용
    → ❌ 최신 버전(3.1.0) 사용하고 싶어서 포기
 
-2. 최신 버전 패키지로 직접 빌드
-   → ❌ 호환성 이슈로 계속 에러 발생
-   
-3. 공식 이미지 사용 + 추가 패키지만 설치
-   → ✅ 해결!
+3. Python 3.13 + apache-airflow-providers-fab 설치
+   → ❌ ModuleNotFoundError: connexion
+   → Flask, Flask-AppBuilder 등 종속성 충돌
+
+4. requirements.txt에 connexion, Flask 등 수동 추가
+   → ❌ 다른 종속성과 버전 충돌 계속 발생
+
+5. Python 3.12 (기본 설정) + FAB Provider + Constraints
+   → ✅ 해결! 모든 종속성 자동 설치됨
 ```
 
 **✅ 최종 해결 방법:**
-```yaml
-# docker-compose.yml
-services:
-  airflow-common:
-    # 공식 이미지 사용 (이미 FabAuthManager 포함)
-    image: apache/airflow:3.1.0
-    
-    environment:
-      # 크롤링 패키지만 추가 설치
-      _PIP_ADDITIONAL_REQUIREMENTS: >
-        requests
-        beautifulsoup4
-        selenium
-        lxml
-        psycopg2-binary
-        python-dotenv
+```dockerfile
+# Dockerfile - Python 3.12 기본 이미지 사용
+FROM apache/airflow:3.1.0  # Python 3.12 (기본)
+
+USER root
+# Chrome 등 OS 패키지 설치...
+
+USER airflow
+ARG AIRFLOW_VERSION=3.1.0
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir \
+    -r /requirements.txt \
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
 ```
 
-**핵심 포인트:**
-- Airflow 공식 이미지에는 이미 필요한 패키지가 대부분 포함
-- 크롤링에 필요한 패키지만 추가로 설치
-- 의존성 충돌 걱정 없이 안정적으로 사용 가능
+```txt
+# requirements.txt - FAB Provider 명시적 설치
+apache-airflow-providers-fab>=1.4.0  # 종속성 자동 설치됨
+requests>=2.31.0
+selenium>=4.15.0
+...
+```
+
+
+
+**핵심 교훈:**
+- ⚠️ **Airflow 3.0+ 주의사항: FAB Provider는 별도 설치 필요!**
+  - 공식 문서가 명확하지 않음 (AIRFLOW_EXTRAS에 fab 포함이라 했지만...)
+  - 실제로는 `apache-airflow-providers-fab` 직접 설치해야 함
+  
+- ⚠️ **무조건 최신보다 호환성 검증된 기본 설정 우선**
+  - Python 3.13 (최신) → 종속성 충돌
+  - Python 3.12 (기본) → 모든 종속성 자동 해결
+  
+- ✅ **Constraints 파일 필수** (Airflow 팀이 검증한 버전 조합)
+- ✅ **Dockerfile 빌드 방식** (런타임 `_PIP_ADDITIONAL_REQUIREMENTS`는 개발용만)
+- ✅ **공식 이미지 기반 + 필요한 Provider만 추가**
 
 ---
 
@@ -759,5 +804,59 @@ services:
 - **메모리 관리:** 멀티스레드 시 수집 후 일괄 처리
 - **세션 재사용:** 쿠키 충돌 방지를 위해 용도별 세션 분리
 - **봇 체크:** 필요한 경우에만 셀레니움 사용
+
+---
+
+## 🚀 AWS 자동 배포
+
+### 1. AWS 설정
+
+#### ECR 리포지토리 생성
+```bash
+aws ecr create-repository --repository-name car-fin-airflow --region ap-northeast-2
+```
+
+#### EC2 초기 설정
+```bash
+# Docker 설치
+sudo yum install -y docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
+
+# Docker Compose 설치
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+# 프로젝트 클론
+git clone https://github.com/YOUR_USERNAME/Car_Fin.git ~/Car_Fin
+cd ~/Car_Fin
+
+# 환경변수 설정
+cp env.example .env
+# .env 파일 편집 (DB, ECR 정보 입력)
+```
+
+### 2. GitHub Secrets 설정
+
+GitHub 리포지토리 → Settings → Secrets → 5가지 추가:
+
+1. **`AWS_ACCESS_KEY_ID`**: IAM 액세스 키
+2. **`AWS_SECRET_ACCESS_KEY`**: IAM 시크릿 키
+3. **`ECR_REPOSITORY_NAME`**: `car-fin-airflow`
+4. **`EC2_HOST`**: EC2 퍼블릭 IP
+5. **`EC2_USER`**: `ec2-user` (Amazon Linux) 또는 `ubuntu`
+
+### 3. 자동 배포 실행
+
+```bash
+git add .
+git commit -m "feat: 새 기능 추가"
+git push origin main
+```
+
+GitHub Actions가 자동으로:
+1. Docker 이미지 빌드
+2. ECR에 업로드
+3. EC2에서 최신 이미지 pull & 재시작
 
 ---

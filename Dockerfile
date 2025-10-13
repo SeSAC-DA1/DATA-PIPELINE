@@ -1,9 +1,9 @@
-FROM apache/airflow:3.1.0-python3.13
+FROM apache/airflow:3.1.0
 
+# root로 OS/Chrome 설치
 USER root
+# apt-get 설치 시 대화형 입력을 비활성화하는 환경변수
 ENV DEBIAN_FRONTEND=noninteractive
-
-# 필수 OS 패키지 + Chrome
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       curl gnupg ca-certificates unzip \
@@ -16,15 +16,16 @@ RUN apt-get update && \
       > /etc/apt/sources.list.d/google-chrome.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends google-chrome-stable && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get autoremove -yqq --purge && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# airflow 유저로 돌아와 Python 패키지 설치 (+constraints)
 USER airflow
-
-# 추가 패키지 설치 (공식 방식: constraints 없이)
+ARG AIRFLOW_VERSION=3.1.0
 ENV PIP_NO_CACHE_DIR=1
-
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir \
+    -r /requirements.txt \
+    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
 
 # 런타임 힌트
 ENV CHROME_BIN=/usr/bin/google-chrome \
