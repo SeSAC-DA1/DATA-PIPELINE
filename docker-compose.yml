@@ -1,7 +1,10 @@
 x-airflow-common:
   &airflow-common
-  # 로컬 테스트용: 로컬 이미지 사용, 배포시: ECR 이미지 사용
-  image: ${DOCKER_IMAGE:-car-fin-airflow:local}
+  # Dockerfile로 직접 빌드
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: car-fin-airflow:latest
   env_file:
     - .env
   environment:
