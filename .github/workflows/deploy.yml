@@ -56,10 +56,13 @@ jobs:
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
             
             # 새 이미지 pull
-            docker-compose pull
+            DOCKER_IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:latest docker-compose pull
             
-            # 컨테이너 재시작
-            docker-compose up -d
+            # 컨테이너 재시작 (ECR 이미지 사용)
+            DOCKER_IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:latest docker-compose up -d
+            
+            # Docker 로그아웃 (보안을 위해)
+            docker logout ${ECR_REGISTRY}
             
             # 사용하지 않는 이미지 정리
             docker image prune -f

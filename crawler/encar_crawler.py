@@ -60,18 +60,19 @@ def build_session() -> requests.Session:
 
     s.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept": "application/json, text/plain, */*",
         "Accept-Language": "ko,ko-KR;q=0.9,en-US;q=0.8,en;q=0.7",
         "Accept-Encoding": "gzip, deflate, br, zstd",
         "Origin": "https://www.encar.com",
         "Referer": "https://www.encar.com/",
-        "Priority": "u=1, i",
-        "Sec-Ch-Ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+        "Priority": "u=0, i",
+        "Sec-Ch-Ua": '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-site"
+        "Sec-Fetch-Site": "same-site",
+        "Cache-Control": "no-cache"
     })
     return s
 
@@ -80,16 +81,13 @@ def build_session() -> requests.Session:
 # =============================================================================
 def get_encar_api_data(url: str, session: requests.Session, params: Optional[Dict] = None) -> Optional[Dict]:
     try:
-        print(f"[API 요청] URL: {url}, 파라미터: {params}")
         response = session.get(url, params=params, timeout=15)
-        print(f"[API 응답] 상태코드: {response.status_code}")
         response.raise_for_status()
         data = response.json()
-        print(f"[API 성공] 데이터 타입: {type(data)}, 키 개수: {len(data) if isinstance(data, dict) else 'N/A'}")
         return data
     except requests.exceptions.RequestException as e:
         # 404는 정상적인 경우이므로 출력하지 않음
-        if e.response and e.response.status_code != 404:
+        if e.response and e.response.status_code not in [404, 429]:
             print(f"[API 호출 오류] URL: {url}, 상태코드: {e.response.status_code if e.response else 'N/A'}, 오류: {e}")
         return None
     except Exception as e:

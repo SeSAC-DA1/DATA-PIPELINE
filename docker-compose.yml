@@ -1,7 +1,7 @@
 x-airflow-common:
   &airflow-common
-  # GitHub Actions에서 빌드한 ECR 이미지 사용
-  image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+  # 로컬 테스트용: 로컬 이미지 사용, 배포시: ECR 이미지 사용
+  image: ${DOCKER_IMAGE:-car-fin-airflow:local}
   env_file:
     - .env
   environment:
