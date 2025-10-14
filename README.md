@@ -854,7 +854,7 @@ Airflow DAG 실행 결과를 Slack으로 받을 수 있습니다.
 4. **Incoming Webhooks** → **Activate Incoming Webhooks**를 **On**으로 설정
 5. **Add New Webhook to Workspace** → 채널 선택 → **허용**
 6. 생성된 **Webhook URL** 복사  
-   예: `https://hooks.slack.com/services/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`
+   예: `https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX`
 
 ### 2. Airflow Connection 설정
 
@@ -867,7 +867,7 @@ Airflow UI에서 Slack 연결을 등록합니다:
    - **Connection Type**: `Slack Incoming Webhook` ⭐ (공식 권장)
    - **Slack Webhook Endpoint**: `hooks.slack.com/services`
    - **Webhook Token**: Webhook URL의 토큰 부분  
-     예: `T090XGNCMFB/B09KYFJMNH3/L713QSfyn8K2xlwk7r0bfQxg`
+     예: `T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX
    - **Schema**: `https`
 4. **Save** 클릭
 
