@@ -52,25 +52,31 @@ jobs:
           script: |
             cd ~/CarFin
             
-            # 1. 최신 코드 받기 (볼륨 마운트용)
+            # 1. AWS CLI 설치 확인 및 설치
+            if ! command -v aws &> /dev/null; then
+              echo "AWS CLI not found, installing..."
+              sudo apt update && sudo apt install awscli -y
+            fi
+            
+            # 2. 최신 코드 받기 (볼륨 마운트용)
             git pull origin main
             
-            # 2. ECR 로그인
+            # 3. ECR 로그인
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
             
-            # 3. 기존 컨테이너 중지 및 삭제 (볼륨 포함)
+            # 4. 기존 컨테이너 중지 및 삭제 (볼륨 포함)
             docker-compose down -v
             
-            # 4. 기존 이미지 완전 제거 (강제)
+            # 5. 기존 이미지 완전 제거 (강제)
             docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest || true
             docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} || true
             
-            # 5. 최신 이미지 pull (강제)
+            # 6. 최신 이미지 pull (강제)
             docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
             
-            # 6. 새 컨테이너 시작 (강제 재빌드)
+            # 7. 새 컨테이너 시작 (강제 재빌드)
             docker-compose up -d --force-recreate --remove-orphans
             
-            # 7. 정리 (사용하지 않는 이미지 제거)
+            # 8. 정리 (사용하지 않는 이미지 제거)
             docker image prune -af
 
