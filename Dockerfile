@@ -28,6 +28,13 @@ RUN pip install --no-cache-dir \
     -r /requirements.txt \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-3.12.txt"
 
+# 코드 복사 (볼륨 마운트 제거했으므로 이미지에 포함)
+COPY --chown=airflow:0 dags/ /opt/airflow/dags/
+COPY --chown=airflow:0 crawler/ /opt/airflow/crawler/
+COPY --chown=airflow:0 db/ /opt/airflow/db/
+COPY --chown=airflow:0 utils/ /opt/airflow/utils/
+COPY --chown=airflow:0 config/ /opt/airflow/config/
+
 # 런타임 힌트
 ENV CHROME_BIN=/usr/bin/google-chrome \
     LANG=C.UTF-8 \
