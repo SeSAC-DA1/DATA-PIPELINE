@@ -1,21 +1,14 @@
 from datetime import datetime, timedelta
+import pytz
 from airflow import DAG
 from airflow.providers.standard.operators.python import PythonOperator
 import sys
 sys.path.append('/opt/airflow')
 from crawler.getcha_crawler import execute_full_crawling
-from utils.slack_alert import task_fail_slack_alert, dag_success_slack_alert
+from utils.slack_alert import dag_success_slack_alert, get_default_args
 
-# 기본 설정
-default_args = {
-    'owner': 'airflow',
-    'depends_on_past': False,
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 2,
-    'retry_delay': timedelta(minutes=10),
-    'on_failure_callback': task_fail_slack_alert,  # Task 실패 시 Slack 알림
-}
+# 기본 설정 (공통 함수 사용)
+default_args = get_default_args(retries=2, retry_delay_minutes=10)
 
 # DAG 정의
 with DAG(
@@ -23,7 +16,7 @@ with DAG(
     default_args=default_args,
     description='Getcha 차량 오너 리뷰 주간 크롤링',
     schedule='0 1 * * 0',  # 매주 일요일 새벽 1시
-    start_date=datetime(2025, 10, 14),  # 현재 날짜로 설정
+    start_date=datetime(2024, 1, 1, tzinfo=pytz.timezone('Asia/Seoul')),  # 과거 & KST
     catchup=False,
     max_active_runs=1,  # 동시 실행 최대 1개로 제한
     tags=['crawling', 'getcha', 'review', 'weekly'],

@@ -20,6 +20,8 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     # airflow.cfg 참조 설정
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    # 웹 UI 테마 설정
+    AIRFLOW__WEBSERVER__WEB_UI_THEME: 'dark'
     # 크롤러용 ENV
     DB_HOST: ${DB_HOST}
     DB_PORT: ${DB_PORT}

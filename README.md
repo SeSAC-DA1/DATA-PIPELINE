@@ -816,26 +816,6 @@ services:
 aws ecr create-repository --repository-name car-fin-airflow --region ap-northeast-2
 ```
 
-#### EC2 초기 설정
-```bash
-# Docker 설치
-sudo yum install -y docker
-sudo systemctl start docker
-sudo usermod -aG docker ec2-user
-
-# Docker Compose 설치
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-
-# 프로젝트 클론
-git clone https://github.com/YOUR_USERNAME/Car_Fin.git ~/Car_Fin
-cd ~/Car_Fin
-
-# 환경변수 설정
-cp env.example .env
-# .env 파일 편집 (DB, ECR 정보 입력)
-```
-
 ### 2. GitHub Secrets 설정
 
 GitHub 리포지토리 → Settings → Secrets → 5가지 추가:
@@ -864,7 +844,7 @@ GitHub Actions가 자동으로:
 ## 📢 Slack 알림 설정
 
 Airflow DAG 실행 결과를 Slack으로 받을 수 있습니다.  
-**Apache Airflow Providers - Slack** 공식 패키지를 사용합니다.
+**Apache Airflow 3.x 공식 권장 방식인 SlackWebhookNotifier**를 사용합니다.
 
 ### 1. Slack Webhook 생성
 
@@ -874,7 +854,7 @@ Airflow DAG 실행 결과를 Slack으로 받을 수 있습니다.
 4. **Incoming Webhooks** → **Activate Incoming Webhooks**를 **On**으로 설정
 5. **Add New Webhook to Workspace** → 채널 선택 → **허용**
 6. 생성된 **Webhook URL** 복사  
-   예: `https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXX`
+   예: `https://hooks.slack.com/services/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`
 
 ### 2. Airflow Connection 설정
 
@@ -884,30 +864,44 @@ Airflow UI에서 Slack 연결을 등록합니다:
 2. **Admin** → **Connections** 메뉴
 3. **+** 버튼 클릭하여 새 연결 추가:
    - **Connection Id**: `slack_webhook`
-   - **Connection Type**: `HTTP`
-   - **Host**: `https://hooks.slack.com/services`
-   - **Password**: Webhook URL의 나머지 부분  
-     예: `T00000000/B00000000/XXXXXXXXXXXX`
+   - **Connection Type**: `Slack Incoming Webhook` ⭐ (공식 권장)
+   - **Slack Webhook Endpoint**: `hooks.slack.com/services`
+   - **Webhook Token**: Webhook URL의 토큰 부분  
+     예: `T090XGNCMFB/B09KYFJMNH3/L713QSfyn8K2xlwk7r0bfQxg`
+   - **Schema**: `https`
 4. **Save** 클릭
 
-### 3. Docker Compose 재시작
 
-패키지 설치를 위해 재빌드:
+### 3. 알림 종류
 
-```bash
-docker-compose down
-docker-compose up -d --build
+- 🚨 **Task 실패 알림**: 모든 Task 실패 시 자동 전송
+- 🎉 **DAG 완료 알림**: DAG 전체 완료 시 전송 (마지막 Task)
+
+### 4. 테스트 DAG 실행
+
+Slack 알림이 정상 작동하는지 테스트하려면:
+
+1. **Airflow UI 접속**: `http://your-ec2-ip:8080`
+2. **테스트 DAG 찾기**: `slack_test_dag` 검색
+3. **DAG 실행**: DAG 이름 클릭 → **Trigger DAG** 버튼
+4. **알림 확인**: Slack 채널에서 알림 메시지 확인
+
+**테스트 DAG 구성:**
+- ✅ **성공 알림**: `success_test` 태스크 성공 시
+- ❌ **실패 알림**: `fail_test_bash`, `fail_test_python` 태스크 실패 시  
+- 🎉 **DAG 완료**: 모든 테스트 완료 시
+
+### 5. 알림 메시지 예시
+
+```
+:red_circle: *Airflow Task 실패 알림*
+
+*DAG*: `slack_test_dag`
+*Task*: `fail_test_python`
+*실행 시간*: 2025-10-14T02:00:00+00:00
+*상태*: failed
+*오류*: 의도적인 실패 - Slack 알림 테스트용
+
+<http://localhost:8080/log/...|로그 보기>
 ```
 
-### 4. 알림 종류
-
-- 🚨 **실패 알림**: 모든 Task 실패 시 자동 전송 (DAG별)
-- 🎉 **성공 알림**: DAG 전체 완료 시 전송 (마지막 Task만)
-
-### 5. 알림 비활성화
-
-특정 DAG의 알림을 끄려면 해당 DAG 파일에서:
-- `default_args`의 `on_failure_callback` 제거 (실패 알림 OFF)
-- `end` Task의 `on_success_callback` 제거 (성공 알림 OFF)
-
----
