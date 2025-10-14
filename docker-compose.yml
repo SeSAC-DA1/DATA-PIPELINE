@@ -1,10 +1,7 @@
 x-airflow-common:
   &airflow-common
-  # 로컬: build 사용, AWS: image 사용 (환경변수로 제어)
+  # GitHub Actions에서 빌드한 ECR 이미지 사용
   image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-  build:
-    context: .
-    dockerfile: Dockerfile
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
