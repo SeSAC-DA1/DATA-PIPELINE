@@ -52,13 +52,8 @@ jobs:
           script: |
             cd ~/CarFin
             
-            # 1. AWS CLI 설치 확인 및 설치
-            if ! command -v aws &> /dev/null; then
-              echo "AWS CLI not found, installing..."
-              sudo apt update
-              # Ubuntu 24.04에서는 awscli2 패키지 사용
-              sudo apt install awscli2 -y || sudo apt install awscli -y || curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip awscliv2.zip && sudo ./aws/install
-            fi
+            # 1. AWS CLI 확인
+            aws --version
             
             # 2. 기존 컨테이너 중지 (권한 문제 해결)
             docker-compose down || true
@@ -78,7 +73,7 @@ jobs:
             docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest || true
             docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} || true
             
-            # 7. 최신 이미지 pull (강제)
+            # 7. 최신 이미지 pull (GitHub Actions에서 빌드한 이미지)
             docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
             
             # 8. 새 컨테이너 시작 (강제 재빌드)
