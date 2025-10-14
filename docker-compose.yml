@@ -2,6 +2,8 @@ x-airflow-common:
   &airflow-common
   # GitHub Actions에서 빌드한 ECR 이미지 사용
   image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+  env_file:
+    - .env
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -28,13 +30,9 @@ x-airflow-common:
     NAVER_ID: ${NAVER_ID}
     NAVER_PASSWORD: ${NAVER_PASSWORD}
   volumes:
-    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_PROJ_DIR:-.}/crawler:/opt/airflow/crawler
-    - ${AIRFLOW_PROJ_DIR:-.}/db:/opt/airflow/db
-    - ${AIRFLOW_PROJ_DIR:-.}/utils:/opt/airflow/utils
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on

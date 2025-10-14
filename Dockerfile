@@ -2,8 +2,9 @@ FROM apache/airflow:3.1.0
 
 # root로 OS/Chrome 설치
 USER root
-# apt-get 설치 시 대화형 입력을 비활성화하는 환경변수
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Chrome 설치를 위한 패키지 설치
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       curl gnupg ca-certificates unzip \
@@ -16,7 +17,7 @@ RUN apt-get update && \
       > /etc/apt/sources.list.d/google-chrome.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends google-chrome-stable && \
-    apt-get autoremove -yqq --purge && apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get autoremove -yqq --purge && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # airflow 유저로 돌아와 Python 패키지 설치 (+constraints)
 USER airflow

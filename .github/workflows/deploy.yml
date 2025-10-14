@@ -43,44 +43,24 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: ${{ github.sha }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
+          envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION
           script: |
+            set -e  # 에러 발생 시 스크립트 중단
             cd ~/CarFin
             
-            # 1. AWS CLI 확인
-            aws --version
-            
-            # 2. 기존 컨테이너 중지 (권한 문제 해결)
-            docker-compose down || true
-            
-            # 3. 최신 코드 받기 (볼륨 마운트용)
-            git fetch origin main
-            git reset --hard origin/main
-            git clean -fd
-            
-            # 4. ECR 로그인 (환경변수 사용)
-            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+            # ECR 로그인 (EC2 IAM Role 자동 사용)
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
             
-            # 5. 기존 컨테이너 완전 삭제 (볼륨 포함)
-            docker-compose down -v
+            # 새 이미지 pull
+            docker-compose pull
             
-            # 6. 기존 이미지 완전 제거 (강제)
-            docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest || true
-            docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} || true
+            # 컨테이너 재시작
+            docker-compose up -d
             
-            # 7. 최신 이미지 pull (GitHub Actions에서 빌드한 이미지)
-            docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-            
-            # 8. 새 컨테이너 시작 (강제 재빌드)
-            docker-compose up -d --force-recreate --remove-orphans
-            
-            # 9. 정리 (사용하지 않는 이미지 제거)
-            docker image prune -af
+            # 사용하지 않는 이미지 정리
+            docker image prune -f
 
