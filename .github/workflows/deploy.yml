@@ -20,12 +20,13 @@ jobs:
             set -e  # 에러 발생 시 스크립트 중단
             cd ~/CarFin
             
-            # 최신 코드 받기
-            git fetch origin
-            git reset --hard origin/main
-            
             # 기존 컨테이너 및 볼륨 완전히 제거
             docker-compose down -v
+            
+            # 최신 코드 받기 (권한 문제 해결)
+            sudo git fetch origin
+            sudo git reset --hard origin/main
+            sudo chown -R ubuntu:ubuntu .
             
             # 이미지 빌드
             docker-compose build
