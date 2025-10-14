@@ -1,10 +1,4 @@
-"""
-Slack 알림 테스트 DAG
 
-이 DAG는 Slack 알림 설정이 올바르게 작동하는지 테스트하기 위한 용도입니다.
-- 성공 테스트: 정상 완료 알림
-- 실패 테스트: 실패 시 알림
-"""
 from datetime import datetime, timedelta
 import pytz
 from airflow import DAG
