@@ -57,8 +57,8 @@ jobs:
             # 2. ECR 로그인
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
             
-            # 3. 기존 컨테이너 중지 및 삭제
-            docker-compose down
+            # 3. 기존 컨테이너 중지 및 삭제 (볼륨 포함)
+            docker-compose down -v
             
             # 4. 기존 이미지 완전 제거 (강제)
             docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest || true
