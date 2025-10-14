@@ -59,7 +59,9 @@ jobs:
             fi
             
             # 2. 최신 코드 받기 (볼륨 마운트용)
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fd
             
             # 3. ECR 로그인
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
