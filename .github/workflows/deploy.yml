@@ -55,30 +55,35 @@ jobs:
             # 1. AWS CLI 설치 확인 및 설치
             if ! command -v aws &> /dev/null; then
               echo "AWS CLI not found, installing..."
-              sudo apt update && sudo apt install awscli -y
+              sudo apt update
+              # Ubuntu 24.04에서는 awscli2 패키지 사용
+              sudo apt install awscli2 -y || sudo apt install awscli -y || curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip awscliv2.zip && sudo ./aws/install
             fi
             
-            # 2. 최신 코드 받기 (볼륨 마운트용)
+            # 2. 기존 컨테이너 중지 (권한 문제 해결)
+            docker-compose down || true
+            
+            # 3. 최신 코드 받기 (볼륨 마운트용)
             git fetch origin main
             git reset --hard origin/main
             git clean -fd
             
-            # 3. ECR 로그인
+            # 4. ECR 로그인
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
             
-            # 4. 기존 컨테이너 중지 및 삭제 (볼륨 포함)
+            # 5. 기존 컨테이너 완전 삭제 (볼륨 포함)
             docker-compose down -v
             
-            # 5. 기존 이미지 완전 제거 (강제)
+            # 6. 기존 이미지 완전 제거 (강제)
             docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest || true
             docker rmi ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG} || true
             
-            # 6. 최신 이미지 pull (강제)
+            # 7. 최신 이미지 pull (강제)
             docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
             
-            # 7. 새 컨테이너 시작 (강제 재빌드)
+            # 8. 새 컨테이너 시작 (강제 재빌드)
             docker-compose up -d --force-recreate --remove-orphans
             
-            # 8. 정리 (사용하지 않는 이미지 제거)
+            # 9. 정리 (사용하지 않는 이미지 제거)
             docker image prune -af
 
