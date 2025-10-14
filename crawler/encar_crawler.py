@@ -80,13 +80,20 @@ def build_session() -> requests.Session:
 # =============================================================================
 def get_encar_api_data(url: str, session: requests.Session, params: Optional[Dict] = None) -> Optional[Dict]:
     try:
+        print(f"[API 요청] URL: {url}, 파라미터: {params}")
         response = session.get(url, params=params, timeout=15)
+        print(f"[API 응답] 상태코드: {response.status_code}")
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        print(f"[API 성공] 데이터 타입: {type(data)}, 키 개수: {len(data) if isinstance(data, dict) else 'N/A'}")
+        return data
     except requests.exceptions.RequestException as e:
         # 404는 정상적인 경우이므로 출력하지 않음
         if e.response and e.response.status_code != 404:
-            print(f"[API 호출 오류] URL: {url}, 오류: {e}")
+            print(f"[API 호출 오류] URL: {url}, 상태코드: {e.response.status_code if e.response else 'N/A'}, 오류: {e}")
+        return None
+    except Exception as e:
+        print(f"[API 파싱 오류] URL: {url}, 오류: {e}")
         return None
 
 def get_car_list(session: requests.Session, q_filter: str, page: int, page_size: int) -> List[Dict]:
