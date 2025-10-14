@@ -860,3 +860,54 @@ GitHub Actions가 자동으로:
 3. EC2에서 최신 이미지 pull & 재시작
 
 ---
+
+## 📢 Slack 알림 설정
+
+Airflow DAG 실행 결과를 Slack으로 받을 수 있습니다.  
+**Apache Airflow Providers - Slack** 공식 패키지를 사용합니다.
+
+### 1. Slack Webhook 생성
+
+1. **Slack API 페이지**: [https://api.slack.com/apps](https://api.slack.com/apps) 접속
+2. **Create New App** → **From scratch** 선택
+3. 앱 이름과 워크스페이스 선택 후 **Create App**
+4. **Incoming Webhooks** → **Activate Incoming Webhooks**를 **On**으로 설정
+5. **Add New Webhook to Workspace** → 채널 선택 → **허용**
+6. 생성된 **Webhook URL** 복사  
+   예: `https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXX`
+
+### 2. Airflow Connection 설정
+
+Airflow UI에서 Slack 연결을 등록합니다:
+
+1. **Airflow 웹 UI** 접속 (http://your-ec2-ip:8080)
+2. **Admin** → **Connections** 메뉴
+3. **+** 버튼 클릭하여 새 연결 추가:
+   - **Connection Id**: `slack_webhook`
+   - **Connection Type**: `HTTP`
+   - **Host**: `https://hooks.slack.com/services`
+   - **Password**: Webhook URL의 나머지 부분  
+     예: `T00000000/B00000000/XXXXXXXXXXXX`
+4. **Save** 클릭
+
+### 3. Docker Compose 재시작
+
+패키지 설치를 위해 재빌드:
+
+```bash
+docker-compose down
+docker-compose up -d --build
+```
+
+### 4. 알림 종류
+
+- 🚨 **실패 알림**: 모든 Task 실패 시 자동 전송 (DAG별)
+- 🎉 **성공 알림**: DAG 전체 완료 시 전송 (마지막 Task만)
+
+### 5. 알림 비활성화
+
+특정 DAG의 알림을 끄려면 해당 DAG 파일에서:
+- `default_args`의 `on_failure_callback` 제거 (실패 알림 OFF)
+- `end` Task의 `on_success_callback` 제거 (성공 알림 OFF)
+
+---

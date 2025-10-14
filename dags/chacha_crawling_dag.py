@@ -4,6 +4,7 @@ from airflow.providers.standard.operators.python import PythonOperator
 import sys
 sys.path.append('/opt/airflow')
 from crawler.chacha_crawler import crawl_kb_chachacha
+from utils.slack_alert import task_fail_slack_alert, dag_success_slack_alert
 
 # 기본 설정
 default_args = {
@@ -13,6 +14,7 @@ default_args = {
     'email_on_retry': False,
     'retries': 3,
     'retry_delay': timedelta(minutes=30),
+    'on_failure_callback': task_fail_slack_alert,  # Task 실패 시 Slack 알림
 }
 
 # DAG 정의
@@ -72,6 +74,7 @@ with DAG(
     end_log = PythonOperator(
         task_id='end',
         python_callable=end_task,
+        on_success_callback=dag_success_slack_alert,  # DAG 전체 성공 시 Slack 알림
     )
 
     # Task 의존성 설정
