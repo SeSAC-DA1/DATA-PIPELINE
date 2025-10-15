@@ -885,7 +885,7 @@ Slack 알림이 정상 작동하는지 테스트하려면:
 2. **테스트 DAG 찾기**: `slack_test_dag` 검색
 3. **DAG 실행**: DAG 이름 클릭 → **Trigger DAG** 버튼
 4. **알림 확인**: Slack 채널에서 알림 메시지 확인
-
+7                                                                                                               
 **테스트 DAG 구성:**
 - ✅ **성공 알림**: `success_test` 태스크 성공 시
 - ❌ **실패 알림**: `fail_test_bash`, `fail_test_python` 태스크 실패 시  
