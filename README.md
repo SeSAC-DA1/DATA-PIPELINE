@@ -872,12 +872,25 @@ Airflow UI에서 Slack 연결을 등록합니다:
 4. **Save** 클릭
 
 
-### 3. 알림 종류
+### 3. 로그 링크 설정
+
+슬랙 알람의 "로그 보기" 버튼이 올바른 서버 주소로 연결되도록 설정합니다:
+
+**config/airflow.cfg** 파일에 다음 설정이 포함되어 있습니다:
+```ini
+[api]
+# API 서버 기본 설정 (Airflow 3.x용)
+base_url = http://ec2-13-125-232-188.ap-northeast-2.compute.amazonaws.com:8080
+```
+
+이 설정으로 슬랙 알람의 로그 링크가 `localhost:8080`이 아닌 실제 EC2 서버 주소로 연결됩니다.
+
+### 4. 알림 종류
 
 - 🚨 **Task 실패 알림**: 모든 Task 실패 시 자동 전송
 - 🎉 **DAG 완료 알림**: DAG 전체 완료 시 전송 (마지막 Task)
 
-### 4. 테스트 DAG 실행
+### 5. 테스트 DAG 실행
 
 Slack 알림이 정상 작동하는지 테스트하려면:
 
@@ -891,7 +904,7 @@ Slack 알림이 정상 작동하는지 테스트하려면:
 - ❌ **실패 알림**: `fail_test_bash`, `fail_test_python` 태스크 실패 시  
 - 🎉 **DAG 완료**: 모든 테스트 완료 시
 
-### 5. 알림 메시지 예시
+### 6. 알림 메시지 예시
 
 ```
 :red_circle: *Airflow Task 실패 알림*
@@ -902,6 +915,6 @@ Slack 알림이 정상 작동하는지 테스트하려면:
 *상태*: failed
 *오류*: 의도적인 실패 - Slack 알림 테스트용
 
-<http://:8080/log/...|로그 보기>
+<http://ec2-13-125-232-188.ap-northeast-2.compute.amazonaws.com:8080/log/...|로그 보기>
 ```
 
