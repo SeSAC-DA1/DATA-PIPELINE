@@ -768,7 +768,10 @@ def crawl_encar(max_pages_per_modelgroup: int = 1000, page_size: int = 50, clean
         
         # 전체 차량 수 조회
         total_count_data = get_encar_api_data(BASE_URL, session, params={"count": "true", "q": f"(And.Hidden.N._.CarType.{car_type}.)"})
-        print(f"[전체 {origin_name} 수] {total_count_data.get('Count', 0):,}대")
+        if total_count_data is None:
+            print(f"[전체 {origin_name} 수] 조회 실패 - 건너뜁니다")
+        else:
+            print(f"[전체 {origin_name} 수] {total_count_data.get('Count', 0):,}대")
         
         # 해당 타입의 브랜드 목록 조회
         major_brands = get_encar_brands(session, car_type)
